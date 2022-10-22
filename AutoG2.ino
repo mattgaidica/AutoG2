@@ -10,31 +10,37 @@ I2C device found at address 0x6B  !
 #include <Arduino_MKRIoTCarrier.h>
 #include "ADS1X15.h"
 #include <Tic.h>
+#include <FlashStorage_SAMD.h>
 
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
 TicI2C tic;
 
+// Menus
 const int MENU_CAL = 0;
 const int MENU_SET = 1;
 const int MENU_MANUAL = 2;
 const int MENU_DEBUG = 3;
 const int MENU_HOME = 4;
-const String MENU_NONE = "X";
-
-const int SMALL_TEXT = 1;
+const String MENU_NONE = ".";
+// Text settings
+const int SMALL_TEXT = 2;
 const int MID = 120;
-const int ROW = 10;
-
-const int TOUCH_THRESH = 900;
+const int ROW = 20;
+// Touch settings
+const int TOUCH_THRESH = 1000;
 const int TOUCH_TIMEOUT_MS = 50;
-
-int val_0 = 0;
+// Variables
 bool touch[5] = { 0 };
 bool menuMask[5] = { 0 };
 long int touchMsElapsed[5] = { 0 };
+long int refreshTime = 0;
 int iLED = 0;
 bool LEDdir = 1;
+// Calibration
+int calibrationWeights[3] = { 0, 100, 200 };
+int calibrationADC[3] = { 0 };
+const int CAL_NVS_ADDR = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -43,13 +49,17 @@ void setup() {
 
   clearScreen();  // default is white text
   carrier.display.setTextSize(SMALL_TEXT);
-  centerString("Initializing...", MID, MID);  // use +/-ROW
+  centerString("Init...", MID, MID);  // use +/-ROW
   // carrier.display.setTextSize(SMALL_TEXT);
 
   carrier.leds.setBrightness(50);
 
   ADS.begin();
   ADS.setGain(16);
+
+  for (int i = 0; i < 3; i++) {
+    EEPROM.get(CAL_NVS_ADDR + i * sizeof(calibrationADC[i]), calibrationADC[i]);
+  }
 
   homeMenu();
 }
@@ -100,27 +110,58 @@ void buttonsUpdate() {
 void homeMenu() {
   debounceMenu();
   centerString("Hello, Matt.", MID, MID);  // use +/-ROW
-  makeButtonMenu("Calibrate", "Set Unload", "Control", "Debug", "Home");
+  makeButtonMenu("Cal", "Set", "Ctrl", "Debug", "Home");
 }
 
 void calibrateLoad() {
+  bool doOnce = true;
   debounceMenu();
-  makeButtonMenu("Unloaded", "50gr", "100gr", "200gr", "Home");
+  makeButtonMenu("Unloaded", "100gr", "200gr", "Save", "Home");
 
   while (1) {
     buttonsUpdate();
-    // do stuff
-
+    if (doOnce) {
+      doOnce = false;
+      showCalibrationValues();
+    }
+    if (touch[0] | touch[1] | touch[2]) {
+      if (doRefresh(250)) {
+        int16_t loadVal = ADS.readADC_Differential_0_1();
+        for (int i = 0; i < 3; i++) {
+          if (touch[i]) calibrationADC[i] = loadVal;
+        }
+        showCalibrationValues();
+      }
+    }
+    if (touch[3]) {
+      centerString("SAVED", MID, MID + ROW);
+      for (int i = 0; i < 3; i++) {
+        EEPROM.put(CAL_NVS_ADDR + i * sizeof(calibrationADC[i]), calibrationADC[i]);
+      }
+      delay(500);
+      showCalibrationValues();
+    }
     if (touch[MENU_HOME]) {
       homeMenu();
       return;
     }
   }
 }
+void showCalibrationValues() {
+  String calVals = "";
+  for (int i = 0; i < 3; i++) {
+    calVals += String(calibrationADC[i]);
+    if (i < 2) {
+      calVals += ", ";
+    }
+  }
+  clearDataArea();
+  centerString(calVals, MID, MID);
+}
 
 void setUnload() {
   debounceMenu();
-  makeButtonMenu("100% WB", "80% WB", "60% WB", "40% WB", "Home");
+  makeButtonMenu("100%", "80%", "60%", "40%", "Home");
 
   while (1) {
     buttonsUpdate();
@@ -151,16 +192,20 @@ void manualControl() {
 void debugMode() {
   debounceMenu();
   makeButtonMenu(MENU_NONE, MENU_NONE, MENU_NONE, MENU_NONE, "Home");
-
-  float temperature = carrier.Env.readTemperature(FAHRENHEIT);
-  float humidity = carrier.Env.readHumidity();
-  char buffer[30];
-  sprintf(buffer, "%1.0fF, %1.0f%%", temperature, humidity);
-  centerString(buffer, MID, MID);  // use +/-ROW
-
   while (1) {
     buttonsUpdate();
-    // do stuff
+
+    if (doRefresh(200)) {
+      clearDataArea();
+      float temperature = carrier.Env.readTemperature(FAHRENHEIT);
+      float humidity = carrier.Env.readHumidity();
+      char buffer[30];
+      sprintf(buffer, "%1.0fF, %1.0f%%", temperature, humidity);
+      int16_t loadVal = ADS.readADC_Differential_0_1();
+
+      centerString(buffer, MID, MID);  // use +/-ROW
+      centerString(String(loadVal), MID, MID + ROW);
+    }
 
     if (touch[MENU_HOME]) {
       homeMenu();
@@ -169,23 +214,26 @@ void debugMode() {
   }
 }
 
+bool doRefresh(int everyMs) {
+  if (millis() - refreshTime > everyMs) {
+    refreshTime = millis();
+    return true;
+  }
+  return false;
+}
+
 void debounceMenu() {
   clearScreen();
   carrier.leds.clear();
   carrier.leds.show();
   delay(50);
+  refreshTime = millis();
 }
 
-// void displayAnalog() {
-//   val_0++;                                   //ADS.readADC_Differential_0_1();
-//   carrier.display.fillScreen(ST77XX_BLACK);  //oled clear()
-//   carrier.display.setCursor(70, 100);
-//   carrier.display.print("Load Cell:  ");
-//   carrier.display.setTextColor(ST77XX_WHITE);
-//   carrier.display.print(val_0);
-// }
-
 // SCREEN HELPERS
+void clearDataArea() {
+  carrier.display.fillRect(0, 80, 240, 100, ST77XX_BLACK);
+}
 void clearScreen() {
   carrier.display.fillScreen(ST77XX_BLACK);
 }
@@ -217,11 +265,13 @@ void rightString(const String &buf, int x, int y) {
   carrier.display.print(buf);
 }
 void makeButtonMenu(const String &buf0, const String &buf1, const String &buf2, const String &buf3, const String &buf4) {
+  carrier.display.setTextColor(ST77XX_RED);
   rightString(buf0, 220, 70);
   rightString(buf1, 210, 190);
   centerString(buf2, 120, 225);
   leftString(buf3, 30, 190);
   leftString(buf4, 20, 70);
+  carrier.display.setTextColor(ST77XX_WHITE);
 
   // handle mask
   memset(menuMask, 1, sizeof(menuMask));
