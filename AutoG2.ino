@@ -8,13 +8,15 @@ I2C device found at address 0x6A  !
 I2C device found at address 0x6B  !
 */
 #include <Arduino_MKRIoTCarrier.h>
-#include "ADS1X15.h"
+#include <ADS1X15.h>
 #include <Tic.h>
 #include <FlashStorage_SAMD.h>
+#include <LinearRegression.h>
 
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
 TicI2C tic;
+LinearRegression lr = LinearRegression();
 
 // Menus
 const int MENU_CAL = 0;
@@ -23,8 +25,9 @@ const int MENU_MANUAL = 2;
 const int MENU_DEBUG = 3;
 const int MENU_HOME = 4;
 const String MENU_NONE = ".";
+const String WELCOME_MSG = "Hello, Matt.";
 // Text settings
-const int SMALL_TEXT = 2;
+const int TEXT_SIZE = 2;
 const int MID = 120;
 const int ROW = 20;
 // Touch settings
@@ -41,6 +44,7 @@ bool LEDdir = 1;
 int calibrationWeights[3] = { 0, 100, 200 };
 int calibrationADC[3] = { 0 };
 const int CAL_NVS_ADDR = 0;
+double linReg[2];
 
 void setup() {
   Serial.begin(9600);
@@ -48,29 +52,72 @@ void setup() {
   carrier.begin();
 
   clearScreen();  // default is white text
-  carrier.display.setTextSize(SMALL_TEXT);
+  carrier.display.setTextSize(TEXT_SIZE);
   centerString("Init...", MID, MID);  // use +/-ROW
   // carrier.display.setTextSize(SMALL_TEXT);
 
   carrier.leds.setBrightness(50);
 
   ADS.begin();
+  while (!ADS.isConnected()) {
+    Serial.println("No conn");
+  }
   ADS.setGain(16);
 
-  for (int i = 0; i < 3; i++) {
-    EEPROM.get(CAL_NVS_ADDR + i * sizeof(calibrationADC[i]), calibrationADC[i]);
-  }
-
+  loadCalibrationValues();
   homeMenu();
 }
 
 void loop() {
   buttonsUpdate();
 
+  if (doRefresh(10000)) {
+    screenSaver();
+  }
+
   if (touch[MENU_CAL]) calibrateLoad();
   if (touch[MENU_SET]) setUnload();
   if (touch[MENU_MANUAL]) manualControl();
   if (touch[MENU_DEBUG]) debugMode();
+  if (touch[MENU_HOME]) refreshTime = millis();
+}
+
+void screenSaver() {
+  debounceMenu();
+  makeButtonMenu("", "", "", "", "");
+  carrier.display.setTextSize(1);
+  carrier.display.setTextColor(ST77XX_GREEN);
+  int x, y, i = 0;
+
+  while (1) {
+    buttonsUpdate();
+
+    if (y > random(14,24)) {
+      x = random(0, 24);
+      y = 0;
+      i++;
+    }
+    if (doRefresh(5)) {
+      carrier.display.setCursor(x * 10, y * 10);
+      if (random(0, 5) % 3 == 0) {
+        carrier.display.print(char(random(0, 127)));
+      } else {
+        carrier.display.print(" ");
+      }
+      y++;
+      if (i > 40) {
+        i = 0;
+        clearScreen();
+      }
+    }
+
+    if (touch[MENU_HOME]) {
+      carrier.display.setTextSize(TEXT_SIZE);
+      carrier.display.setTextColor(ST77XX_WHITE);
+      homeMenu();
+      return;
+    }
+  }
 }
 
 void buttonsUpdate() {
@@ -109,7 +156,7 @@ void buttonsUpdate() {
 // MENUS
 void homeMenu() {
   debounceMenu();
-  centerString("Hello, Matt.", MID, MID);  // use +/-ROW
+  centerString(WELCOME_MSG, MID, MID);  // use +/-ROW
   makeButtonMenu("Cal", "Set", "Ctrl", "Debug", "Home");
 }
 
@@ -122,6 +169,7 @@ void calibrateLoad() {
     buttonsUpdate();
     if (doOnce) {
       doOnce = false;
+      loadCalibrationValues();  // load from memory
       showCalibrationValues();
     }
     if (touch[0] | touch[1] | touch[2]) {
@@ -130,22 +178,39 @@ void calibrateLoad() {
         for (int i = 0; i < 3; i++) {
           if (touch[i]) calibrationADC[i] = loadVal;
         }
-        showCalibrationValues();
+        showCalibrationValues();  // can change but do not save automatically
       }
     }
-    if (touch[3]) {
-      centerString("SAVED", MID, MID + ROW);
-      for (int i = 0; i < 3; i++) {
-        EEPROM.put(CAL_NVS_ADDR + i * sizeof(calibrationADC[i]), calibrationADC[i]);
-      }
+    if (touch[3]) {  // save to flash
+      centerString("SAVED", MID, MID + ROW * 2);
+      saveCalibrationValues();
       delay(500);
-      showCalibrationValues();
+      showCalibrationValues();  // flash save, clear data area
     }
     if (touch[MENU_HOME]) {
       homeMenu();
       return;
     }
   }
+}
+void learnCalibration() {
+  lr.reset();
+  for (int i = 0; i < 3; i++) {
+    lr.learn(calibrationWeights[i], calibrationADC[i]);
+  }
+  lr.parameters(linReg);
+}
+void saveCalibrationValues() {
+  for (int i = 0; i < 3; i++) {
+    EEPROM.put(CAL_NVS_ADDR + i * sizeof(calibrationADC[i]), calibrationADC[i]);
+  }
+  learnCalibration();
+}
+void loadCalibrationValues() {
+  for (int i = 0; i < 3; i++) {
+    EEPROM.get(CAL_NVS_ADDR + i * sizeof(calibrationADC[i]), calibrationADC[i]);
+  }
+  learnCalibration();
 }
 void showCalibrationValues() {
   String calVals = "";
@@ -155,8 +220,11 @@ void showCalibrationValues() {
       calVals += ", ";
     }
   }
+  char buffer[30];
+  sprintf(buffer, "y = %1.1fx + %1.1f", linReg[0], linReg[1]);
   clearDataArea();
   centerString(calVals, MID, MID);
+  centerString(String(buffer), MID, MID + ROW);
 }
 
 void setUnload() {
@@ -256,12 +324,6 @@ void rightString(const String &buf, int x, int y) {
   uint16_t w, h;
   carrier.display.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);  //calc width of new string
   carrier.display.setCursor(x - w, y - h / 2);
-  Serial.println(x);
-  Serial.println(y);
-  Serial.println(x1);
-  Serial.println(y1);
-  Serial.println(w);
-  Serial.println(h);
   carrier.display.print(buf);
 }
 void makeButtonMenu(const String &buf0, const String &buf1, const String &buf2, const String &buf3, const String &buf4) {
@@ -280,23 +342,4 @@ void makeButtonMenu(const String &buf0, const String &buf1, const String &buf2, 
   if (buf2 == MENU_NONE) menuMask[2] = 0;
   if (buf3 == MENU_NONE) menuMask[3] = 0;
   if (buf4 == MENU_NONE) menuMask[4] = 0;
-}
-void buttonString(const String &buf, int button) {
-  switch (button) {
-    case 0:
-      rightString(buf, 220, 70);
-      break;
-    case 1:
-      rightString(buf, 210, 190);
-      break;
-    case 2:
-      centerString(buf, 120, 225);
-      break;
-    case 3:
-      leftString(buf, 30, 190);
-      break;
-    case 4:
-      leftString(buf, 20, 70);
-      break;
-  }
 }
