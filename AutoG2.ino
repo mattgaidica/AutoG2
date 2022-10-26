@@ -2,13 +2,16 @@
 #include <Arduino_MKRIoTCarrier.h>
 #include <ADS1X15.h>
 #include <Tic.h>
-#include <FlashStorage_SAMD.h>
 #include <LinearRegression.h>
+#include <Statistic.h>
 
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
 TicI2C tic;
 LinearRegression lr = LinearRegression();
+Statistic stats;
+File animalFile;
+File calibrationFile;
 
 // Menus
 const int MENU_CAL = 0;
@@ -37,6 +40,7 @@ bool LEDdir = 1;
 bool lightOn = false;
 int16_t adcVal = 0;
 bool adcOnline = false;
+bool sdCard = false;
 // Calibration
 int calibrationWeights[3] = { 0, 100, 200 };
 int calibrationADC[3] = { 0 };
@@ -46,7 +50,18 @@ double linReg[2];
 bool motorActive = false;
 const int MOTOR_STEPS_PER_S = 5000000;
 const uint16_t currentLimitWhileMoving = 500;
-const uint16_t currentLimitWhileStopped = 0;
+const uint16_t currentLimitWhileStopped = 50;
+// closed loop
+const int CLOSE_LOOP_TIMEOUT = 100;
+long int closeLoopTime = 0;
+const int LOOP_SAMPLES = 5;
+int16_t adcVals[10] = { 0 };
+int adcCount = 0;
+// SD card
+const String ANIMAL_FILE = "ANIMAL.TXT";
+int animalWeight = 0;
+int animalNumber = 0;
+const String CALIBRATION_FILE = "CAL.TXT";
 
 void setup() {
   Serial.begin(9600);
@@ -59,6 +74,7 @@ void setup() {
   carrier.display.print("+");               // mark center
   centerString("Init...", MID, MID - ROW);  // use +/-ROW
 
+  // init code
   carrier.leds.setBrightness(LED_BRIGHTNESS);
 
   ADS.begin();
@@ -67,6 +83,22 @@ void setup() {
     ADS.setGain(16);
   }
 
+  animalFile = SD.open(ANIMAL_FILE, FILE_READ);
+  if (animalFile) {
+    sdCard = true;
+    animalNumber = animalFile.parseInt();
+    animalWeight = animalFile.parseInt();
+
+    animalFile.close();
+    // seems to have some issues, creating files ahead of time    
+    if (!SD.exists(CALIBRATION_FILE)) {
+      calibrationFile = SD.open(CALIBRATION_FILE, FILE_WRITE);
+      if (calibrationFile) {
+        calibrationFile.println("0,0,0");  // dummy data
+        calibrationFile.close();
+      }
+    }
+  }
   loadCalibrationValues();
   tic.setProduct(TicProduct::T825);
   homeMenu();
@@ -128,10 +160,32 @@ void buttonsUpdate() {
     tic.resetCommandTimeout();
   }
 
+  closeMotorLoop();
+
   if (iLED >= 200) LEDdir = 0;
   if (iLED == 20) LEDdir = 1;
   if (LEDdir) iLED++;
   if (!LEDdir) iLED--;
+}
+
+void closeMotorLoop() {
+  if (millis() > closeLoopTime + CLOSE_LOOP_TIMEOUT) {
+    closeLoopTime = millis();
+    if (adcOnline & motorActive) {
+      adcVal = ADS.readADC_Differential_0_1();
+
+      if (adcCount < LOOP_SAMPLES) {
+        // adcVals[adcCount] = -adcVal;
+        stats.add(adcVal / 1.0);
+        adcCount++;
+      } else {
+        // average value, set motor
+        adcCount = 0;
+        Serial.println(stats.average(), 4);
+        stats.clear();
+      }
+    }
+  }
 }
 
 void screenSaver() {
@@ -176,7 +230,25 @@ void screenSaver() {
 // MENUS
 void homeMenu() {
   debounceMenu();
-  centerString(WELCOME_MSG, MID, MID);  // use +/-ROW
+  // centerString(WELCOME_MSG, MID, MID - ROW * 2);  // use +/-ROW
+  centerString("Animal " + String(animalNumber) + ", " + String(animalWeight) + "gr", MID, MID - ROW);
+  String infoString = "";
+  if (motorActive) {
+    infoString = "M[+],";
+  } else {
+    infoString = "M[-],";
+  }
+  if (adcOnline) {
+    infoString += "ADC[+],";
+  } else {
+    infoString += "ADC[-],";
+  }
+  if (sdCard) {
+    infoString += "SD[+]";
+  } else {
+    infoString += "SD[-]";
+  }
+  centerString(infoString, MID, MID);
   makeButtonMenu("Cal", "Set", "Motor", "Debug", "Home");
 }
 
@@ -203,8 +275,11 @@ void calibrateLoad() {
       }
     }
     if (touch[3]) {  // save to flash
-      centerString("SAVED", MID, MID + ROW);
-      saveCalibrationValues();
+      if (saveCalibrationValues()) {
+        centerString("SAVED", MID, MID + ROW);
+      } else {
+        centerString("FAILED SAVE", MID, MID + ROW);
+      }
       delay(500);
       showCalibrationValues();  // flash save, clear data area
     }
@@ -221,15 +296,29 @@ void learnCalibration() {
   }
   lr.parameters(linReg);
 }
-void saveCalibrationValues() {
-  for (int i = 0; i < 3; i++) {
-    EEPROM.put(CAL_NVS_ADDR + i * sizeof(calibrationADC[i]), calibrationADC[i]);
+bool saveCalibrationValues() {
+  bool retVal = false;
+  if (sdCard) {
+    SD.remove(CALIBRATION_FILE);
+    calibrationFile = SD.open(CALIBRATION_FILE, FILE_WRITE); // overwrite
+    if (calibrationFile) {
+      calibrationFile.println(String(calibrationADC[0]) + "," + String(calibrationADC[1]) + "," + String(calibrationADC[2]));
+      calibrationFile.close();
+      retVal = true;
+    }
   }
   learnCalibration();
+  return retVal;
 }
 void loadCalibrationValues() {
-  for (int i = 0; i < 3; i++) {
-    EEPROM.get(CAL_NVS_ADDR + i * sizeof(calibrationADC[i]), calibrationADC[i]);
+  if (sdCard) {
+    calibrationFile = SD.open(CALIBRATION_FILE, FILE_READ);
+    if (calibrationFile) {
+      calibrationADC[0] = calibrationFile.parseInt();
+      calibrationADC[1] = calibrationFile.parseInt();
+      calibrationADC[2] = calibrationFile.parseInt();
+      calibrationFile.close();
+    }
   }
   learnCalibration();
 }
@@ -280,27 +369,20 @@ void manualControl() {
 
     if (touch[0]) {
       if (motorActive) {
-        tic.setCurrentLimit(currentLimitWhileStopped);
-        tic.enterSafeStart();  // !!check if working
-        motorActive = false;
+        motorOff();
       } else {
-        motorActive = true;
-        tic.setCurrentLimit(currentLimitWhileMoving);
-        tic.exitSafeStart();
+        motorOn();
       }
       debounceMenu();
       doOnce = true;
     }
     if (motorActive) {
       if (touch[1]) {
-        tic.setTargetVelocity(MOTOR_STEPS_PER_S);
-        // carrier.Buzzer.sound(3000);
+        motorDown();
       } else if (touch[3]) {
-        tic.setTargetVelocity(-MOTOR_STEPS_PER_S);
-        // carrier.Buzzer.sound(2000);
+        motorUp();
       } else {
-        tic.setTargetVelocity(0);  // always send 0 if not up/down
-        // carrier.Buzzer.noSound();
+        motorStop();  // always send 0 if not up/down
       }
     }
     if (touch[MENU_HOME]) {
@@ -408,4 +490,25 @@ void makeButtonMenu(const String &buf0, const String &buf1, const String &buf2, 
   if (buf2 == MENU_NONE) menuMask[2] = 0;
   if (buf3 == MENU_NONE) menuMask[3] = 0;
   if (buf4 == MENU_NONE) menuMask[4] = 0;
+}
+
+// MOTOR HELPERS
+void motorStop() {
+  tic.setTargetVelocity(0);
+}
+void motorUp() {
+  tic.setTargetVelocity(-MOTOR_STEPS_PER_S);
+}
+void motorDown() {
+  tic.setTargetVelocity(MOTOR_STEPS_PER_S);
+}
+void motorOn() {
+  motorActive = true;
+  tic.setCurrentLimit(currentLimitWhileMoving);
+  tic.exitSafeStart();
+}
+void motorOff() {
+  tic.setCurrentLimit(currentLimitWhileStopped);
+  tic.enterSafeStart();  // !!check if working
+  motorActive = false;
 }
