@@ -1,4 +1,15 @@
 // BLACK, WHITE, RED, GREEN, BLUE, CYAN, MAGENTA, YELLOW, ORANGE
+// y = m(x) + b
+// ADC = m(crane weight (grams)) + b
+/*
+ |
+A|              x
+D|        x
+C|  x
+ |___________________
+    0    100   200
+   crane weight (gr)
+*/
 #include <Arduino_MKRIoTCarrier.h>
 #include <ADS1X15.h>
 #include <Tic.h>
@@ -19,7 +30,7 @@ const int MENU_SET = 1;
 const int MENU_MANUAL = 2;
 const int MENU_DEBUG = 3;
 const int MENU_HOME = 4;
-const String MENU_NONE = "-";
+const String MENU_NONE = ".";
 const String WELCOME_MSG = "Hello, Matt";
 const int LED_BRIGHTNESS = 50;
 const int SCREENSAVER_TIMEOUT = 1000 * 10;
@@ -46,17 +57,21 @@ int calibrationWeights[3] = { 0, 100, 200 };
 int calibrationADC[3] = { 0 };
 const int CAL_NVS_ADDR = 0;
 double linReg[2];
-// motor
+// Motor
 bool motorActive = false;
-const int MOTOR_STEPS_PER_S = 5000000;
+const int MOTOR_MAX_ACCEL = 200000;
+const int MOTOR_STEPS_PER_S = 6000000;
 const uint16_t currentLimitWhileMoving = 500;
-const uint16_t currentLimitWhileStopped = 50;
-// closed loop
-const int CLOSE_LOOP_TIMEOUT = 100;
-long int closeLoopTime = 0;
-const int LOOP_SAMPLES = 5;
-int16_t adcVals[10] = { 0 };
+const uint16_t currentLimitWhileStopped = 0;
+const int FORCE_STOP_POS = 600;
+int32_t motorPos = 0;
+// Closed-loop
+// const int LOOP_SAMPLES = 100;
+bool doClosedLoop = false;
+int closedLoopPercent = 100;
 int adcCount = 0;
+const int CLOSED_LOOP_INC = 10;  // percent
+const int ADC_ERROR = 25;        // based on ADC resolution/gain
 // SD card
 const String ANIMAL_FILE = "ANIMAL.TXT";
 int animalWeight = 0;
@@ -90,7 +105,7 @@ void setup() {
     animalWeight = animalFile.parseInt();
 
     animalFile.close();
-    // seems to have some issues, creating files ahead of time    
+    // seems to have some issues, creating files ahead of time
     if (!SD.exists(CALIBRATION_FILE)) {
       calibrationFile = SD.open(CALIBRATION_FILE, FILE_WRITE);
       if (calibrationFile) {
@@ -101,6 +116,10 @@ void setup() {
   }
   loadCalibrationValues();
   tic.setProduct(TicProduct::T825);
+  motorOff();
+  tic.setMaxAccel(MOTOR_MAX_ACCEL);
+  tic.setMaxDecel(MOTOR_MAX_ACCEL);
+  tic.haltAndSetPosition(0);
   homeMenu();
 }
 
@@ -158,8 +177,12 @@ void buttonsUpdate() {
 
   if (motorActive) {
     tic.resetCommandTimeout();
+    motorPos = tic.getCurrentPosition();
+    if (abs(motorPos) > FORCE_STOP_POS) {
+      motorOff();
+      tic.haltAndSetPosition(0);
+    }
   }
-
   closeMotorLoop();
 
   if (iLED >= 200) LEDdir = 0;
@@ -169,28 +192,37 @@ void buttonsUpdate() {
 }
 
 void closeMotorLoop() {
-  if (millis() > closeLoopTime + CLOSE_LOOP_TIMEOUT) {
-    closeLoopTime = millis();
-    if (adcOnline & motorActive) {
-      adcVal = ADS.readADC_Differential_0_1();
-
-      if (adcCount < LOOP_SAMPLES) {
-        // adcVals[adcCount] = -adcVal;
-        stats.add(adcVal / 1.0);
-        adcCount++;
+  if (adcOnline) {
+    adcVal = ADS.readADC_Differential_0_1();
+    // stats.add(adcVal / 1.0);
+    // adcCount++;
+  }
+  if (adcOnline & motorActive & doClosedLoop) { //& adcCount > LOOP_SAMPLES
+    // adcCount = 0;
+    double targetCraneWeight = ((100 - closedLoopPercent) / 100.0) * animalWeight;
+    double targetADC = lr.calculate(targetCraneWeight);
+    // double avgAdc = stats.average();
+    stats.clear();
+    if (targetADC < 0) {  // target load should be negative
+      if (abs(adcVal - targetADC) > ADC_ERROR) { // adcVal
+        if (targetADC < adcVal) { // adcVal
+          motorUp();
+        } else {
+          motorDown();
+        }
       } else {
-        // average value, set motor
-        adcCount = 0;
-        Serial.println(stats.average(), 4);
-        stats.clear();
+        motorStop();
       }
     }
+  }
+  if (!doClosedLoop) {
+    motorStop();
   }
 }
 
 void screenSaver() {
   debounceMenu();
-  makeButtonMenu("", "", "", "", "");
+  makeButtonMenu(MENU_NONE, MENU_NONE, MENU_NONE, MENU_NONE, "");
   carrier.display.setTextSize(1);
   carrier.display.setTextColor(ST77XX_GREEN);
   int x, i = 0;
@@ -253,10 +285,11 @@ void homeMenu() {
 }
 
 void calibrateLoad() {
-  bool doOnce = true;
+  doClosedLoop = false;
   debounceMenu();
   makeButtonMenu("0gr", "100gr", "200gr", "Save", "Home");
 
+  bool doOnce = true;
   while (1) {
     buttonsUpdate();
     if (doOnce) {
@@ -300,7 +333,7 @@ bool saveCalibrationValues() {
   bool retVal = false;
   if (sdCard) {
     SD.remove(CALIBRATION_FILE);
-    calibrationFile = SD.open(CALIBRATION_FILE, FILE_WRITE); // overwrite
+    calibrationFile = SD.open(CALIBRATION_FILE, FILE_WRITE);  // overwrite
     if (calibrationFile) {
       calibrationFile.println(String(calibrationADC[0]) + "," + String(calibrationADC[1]) + "," + String(calibrationADC[2]));
       calibrationFile.close();
@@ -339,11 +372,44 @@ void showCalibrationValues() {
 
 void setUnload() {
   debounceMenu();
-  makeButtonMenu("100%", "80%", "60%", "40%", "Home");
 
+  bool doOnce = true;
   while (1) {
     buttonsUpdate();
-    // do stuff
+
+    if (doOnce) {
+      doOnce = false;
+      if (doClosedLoop) {
+        makeButtonMenu("(-)", "(+)", MENU_NONE, "Turn Off", "Home");
+      } else {
+        makeButtonMenu("(-)", "(+)", MENU_NONE, "Turn On", "Home");
+      }
+      showUnloadSettings();
+    }
+
+    if (touch[0]) {
+      if (closedLoopPercent - CLOSED_LOOP_INC >= 0) {
+        closedLoopPercent = closedLoopPercent - CLOSED_LOOP_INC;
+      }
+      debounceMenu();
+      doOnce = true;
+    }
+    if (touch[1]) {
+      if (closedLoopPercent + CLOSED_LOOP_INC <= 100) {
+        closedLoopPercent = closedLoopPercent + CLOSED_LOOP_INC;
+      }
+      debounceMenu();
+      doOnce = true;
+    }
+    if (touch[3]) {
+      if (doClosedLoop) {
+        doClosedLoop = false;
+      } else {
+        doClosedLoop = true;
+      }
+      debounceMenu();
+      doOnce = true;
+    }
 
     if (touch[MENU_HOME]) {
       homeMenu();
@@ -351,8 +417,15 @@ void setUnload() {
     }
   }
 }
+void showUnloadSettings() {
+  clearDataArea();
+  centerString(String(closedLoopPercent) + "% WB", MID, MID - ROW);
+  centerString("ground: " + String(animalWeight * (closedLoopPercent / 100.0)) + "gr", MID, MID);
+  centerString("crane: " + String(animalWeight * ((100 - closedLoopPercent) / 100.0)) + "gr", MID, MID + ROW);
+}
 
 void manualControl() {
+  doClosedLoop = false;
   debounceMenu();
 
   bool doOnce = true;
@@ -361,10 +434,15 @@ void manualControl() {
     if (doOnce) {
       doOnce = false;
       if (motorActive) {
-        makeButtonMenu("Turn Off", "DOWN", MENU_NONE, "UP", "Home");
+        makeButtonMenu("Turn Off", "DOWN", "Rst", "UP", "Home");
+        showMotorPosition();
       } else {
         makeButtonMenu("Turn On", MENU_NONE, MENU_NONE, MENU_NONE, "Home");
       }
+    }
+
+    if (doRefresh(1000) & motorActive) {
+      showMotorPosition();
     }
 
     if (touch[0]) {
@@ -385,14 +463,22 @@ void manualControl() {
         motorStop();  // always send 0 if not up/down
       }
     }
+    if (touch[2]) {
+      tic.haltAndSetPosition(0);
+    }
     if (touch[MENU_HOME]) {
       homeMenu();
       return;
     }
   }
 }
+void showMotorPosition() {
+  clearDataArea();
+  centerString(String(motorPos), MID, MID);
+}
 
 void debugMode() {
+  doClosedLoop = false;
   debounceMenu();
   makeButtonMenu("Light", MENU_NONE, MENU_NONE, MENU_NONE, "Home");
 
@@ -430,6 +516,7 @@ void debugMode() {
   }
 }
 
+// MENU HELPERS
 bool doRefresh(int everyMs) {
   if (millis() - refreshTime > everyMs) {
     refreshTime = millis();
