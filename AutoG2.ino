@@ -1,12 +1,4 @@
 // BLACK, WHITE, RED, GREEN, BLUE, CYAN, MAGENTA, YELLOW, ORANGE
-/*
-I2C device found at address 0x39  !
-I2C device found at address 0x5C  !
-I2C device found at address 0x5F  !
-I2C device found at address 0x60  !
-I2C device found at address 0x6A  !
-I2C device found at address 0x6B  !
-*/
 #include <Arduino_MKRIoTCarrier.h>
 #include <ADS1X15.h>
 #include <Tic.h>
@@ -44,6 +36,7 @@ int iLED = 0;
 bool LEDdir = 1;
 bool lightOn = false;
 int16_t adcVal = 0;
+bool adcOnline = false;
 // Calibration
 int calibrationWeights[3] = { 0, 100, 200 };
 int calibrationADC[3] = { 0 };
@@ -69,7 +62,10 @@ void setup() {
   carrier.leds.setBrightness(LED_BRIGHTNESS);
 
   ADS.begin();
-  if (ADS.isConnected()) ADS.setGain(16);
+  if (ADS.isConnected()) {
+    adcOnline = true;
+    ADS.setGain(16);
+  }
 
   loadCalibrationValues();
   tic.setProduct(TicProduct::T825);
@@ -198,7 +194,8 @@ void calibrateLoad() {
     }
     if (touch[0] | touch[1] | touch[2]) {
       if (doRefresh(250)) {
-        if (ADS.isConnected()) adcVal = ADS.readADC_Differential_0_1();
+        adcVal = 0;
+        if (adcOnline) adcVal = ADS.readADC_Differential_0_1();
         for (int i = 0; i < 3; i++) {
           if (touch[i]) calibrationADC[i] = adcVal;
         }
@@ -327,7 +324,7 @@ void debugMode() {
       float temperature = carrier.Env.readTemperature(FAHRENHEIT);
       float humidity = carrier.Env.readHumidity();
       char buffer[30];
-      if (ADS.isConnected()) ADS.readADC_Differential_0_1();
+      if (adcOnline) adcVal = ADS.readADC_Differential_0_1();
       sprintf(buffer, "t: 0x%X, %is", millis() / 1000, millis() / 1000);
       centerString(buffer, MID, MID - ROW);
       sprintf(buffer, "Wx: %1.0fF, %1.0f%%", temperature, humidity);
