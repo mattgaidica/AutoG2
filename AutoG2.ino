@@ -210,19 +210,19 @@ void closeMotorLoop() {
     double targetADC = lr.calculate(targetCraneWeight);
     // double avgAdc = stats.average();
     // stats.clear();
-    if (targetADC < 0) {                          // target load should be negative
+    if (targetADC > calibrationADC[0]) {          // target load should be negative
       if (abs(adcVal - targetADC) > ADC_ERROR) {  // adcVal
         if (targetADC < adcVal) {                 // adcVal
-          motorUp();
-        } else {
           motorDown();
+        } else {
+          motorUp();
         }
       } else {
         motorStop();
       }
     }
   }
-  if (!doClosedLoop & cleanupClosedLoop) { // if closed loop recently turned off
+  if (!doClosedLoop & cleanupClosedLoop) {  // if closed loop recently turned off
     cleanupClosedLoop = false;
     motorStop();
   }
