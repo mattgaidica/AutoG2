@@ -25,6 +25,9 @@ File animalFile;
 File calibrationFile;
 
 // Menus
+bool touch[5] = { 0 };
+bool menuMask[5] = { 0 };
+long int touchMsElapsed[5] = { 0 };
 const int MENU_CAL = 0;
 const int MENU_SET = 1;
 const int MENU_MANUAL = 2;
@@ -42,16 +45,10 @@ const int ROW = 20;
 const int TOUCH_THRESH = 1000;
 const int TOUCH_TIMEOUT_MS = 50;
 // Variables
-bool touch[5] = { 0 };
-bool menuMask[5] = { 0 };
-long int touchMsElapsed[5] = { 0 };
 long int refreshTime = 0;
 int iLED = 0;
 bool LEDdir = 1;
 bool lightOn = false;
-int16_t adcVal = 0;
-bool adcOnline = false;
-bool sdCard = false;
 // Calibration
 int calibrationWeights[3] = { 0, 100, 200 };
 int calibrationADC[3] = { 0 };
@@ -65,18 +62,24 @@ const uint16_t currentLimitWhileMoving = 500;
 const uint16_t currentLimitWhileStopped = 0;
 const int FORCE_STOP_POS = 600;
 int32_t motorPos = 0;
+const int RESET_COMMAND_TIMEOUT = 750;  // ms
+long int motorResetTimeElapsed = 0;
 // Closed-loop
 // const int LOOP_SAMPLES = 100;
+// int adcCount = 0;
+int16_t adcVal = 0;
+bool adcOnline = false;
 bool doClosedLoop = false;
 int closedLoopPercent = 100;
-int adcCount = 0;
 const int CLOSED_LOOP_INC = 10;  // percent
 const int ADC_ERROR = 25;        // based on ADC resolution/gain
+bool cleanupClosedLoop = false;
 // SD card
+bool sdCard = false;
 const String ANIMAL_FILE = "ANIMAL.TXT";
+const String CALIBRATION_FILE = "CAL.TXT";
 int animalWeight = 0;
 int animalNumber = 0;
-const String CALIBRATION_FILE = "CAL.TXT";
 
 void setup() {
   Serial.begin(9600);
@@ -139,7 +142,7 @@ void loop() {
 
 // has to run everywhere: updates buttons, motor keep-alive
 void buttonsUpdate() {
-  // clear all
+  // handle button touches
   for (int i = 0; i < 5; i++) {
     if (millis() - touchMsElapsed[i] > TOUCH_TIMEOUT_MS) {
       touch[i] = false;
@@ -153,6 +156,7 @@ void buttonsUpdate() {
     }
   }
   // LED display
+  // !! TURN THIS OFF WHEN CLOSING THE LOOP
   if (lightOn) {
     carrier.leds.clear();
     for (int i = 0; i < 5; i++) {
@@ -170,25 +174,27 @@ void buttonsUpdate() {
           carrier.leds.setPixelColor(i, iLED, 0, 0);
         }
       }
-      carrier.leds.setBrightness(LED_BRIGHTNESS);
-      carrier.leds.show();
     }
+    carrier.leds.setBrightness(LED_BRIGHTNESS);
+    carrier.leds.show();
   }
+  if (iLED >= 200) LEDdir = 0;
+  if (iLED == 20) LEDdir = 1;
+  if (LEDdir) iLED++;
+  if (!LEDdir) iLED--;
 
   if (motorActive) {
-    tic.resetCommandTimeout();
+    if (millis() - motorResetTimeElapsed > RESET_COMMAND_TIMEOUT) {
+      tic.resetCommandTimeout();
+      motorResetTimeElapsed = millis();
+    }
     motorPos = tic.getCurrentPosition();
     if (abs(motorPos) > FORCE_STOP_POS) {
       motorOff();
       tic.haltAndSetPosition(0);
     }
   }
-  closeMotorLoop();
-
-  if (iLED >= 200) LEDdir = 0;
-  if (iLED == 20) LEDdir = 1;
-  if (LEDdir) iLED++;
-  if (!LEDdir) iLED--;
+  closeMotorLoop();  // reads ADC too
 }
 
 void closeMotorLoop() {
@@ -197,15 +203,16 @@ void closeMotorLoop() {
     // stats.add(adcVal / 1.0);
     // adcCount++;
   }
-  if (adcOnline & motorActive & doClosedLoop) { //& adcCount > LOOP_SAMPLES
+  if (adcOnline & motorActive & doClosedLoop) {  //& adcCount > LOOP_SAMPLES
     // adcCount = 0;
+    cleanupClosedLoop = true;  // turn off gracefully
     double targetCraneWeight = ((100 - closedLoopPercent) / 100.0) * animalWeight;
     double targetADC = lr.calculate(targetCraneWeight);
     // double avgAdc = stats.average();
-    stats.clear();
-    if (targetADC < 0) {  // target load should be negative
-      if (abs(adcVal - targetADC) > ADC_ERROR) { // adcVal
-        if (targetADC < adcVal) { // adcVal
+    // stats.clear();
+    if (targetADC < 0) {                          // target load should be negative
+      if (abs(adcVal - targetADC) > ADC_ERROR) {  // adcVal
+        if (targetADC < adcVal) {                 // adcVal
           motorUp();
         } else {
           motorDown();
@@ -215,7 +222,8 @@ void closeMotorLoop() {
       }
     }
   }
-  if (!doClosedLoop) {
+  if (!doClosedLoop & cleanupClosedLoop) { // if closed loop recently turned off
+    cleanupClosedLoop = false;
     motorStop();
   }
 }
@@ -478,7 +486,6 @@ void showMotorPosition() {
 }
 
 void debugMode() {
-  doClosedLoop = false;
   debounceMenu();
   makeButtonMenu("Light", MENU_NONE, MENU_NONE, MENU_NONE, "Home");
 
