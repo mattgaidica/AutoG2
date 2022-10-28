@@ -14,29 +14,25 @@ C|  x
 #include <ADS1X15.h>
 #include <Tic.h>
 #include <LinearRegression.h>
-#include <Statistic.h>
 
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
 TicI2C tic;
 LinearRegression lr = LinearRegression();
-Statistic stats;
-File animalFile;
-File calibrationFile;
+File sdFile;
 
 // Menus
 bool touch[5] = { 0 };
 bool menuMask[5] = { 0 };
-long int touchMsElapsed[5] = { 0 };
+long int touchTime[5] = { 0 };
 const int MENU_CAL = 0;
 const int MENU_SET = 1;
 const int MENU_MANUAL = 2;
 const int MENU_DEBUG = 3;
 const int MENU_HOME = 4;
 const String MENU_NONE = ".";
-const String WELCOME_MSG = "Hello, Matt";
 const int LED_BRIGHTNESS = 50;
-const int SCREENSAVER_TIMEOUT = 1000 * 10;
+const int SCREENSAVER_TIMEOUT = 1000 * 30;
 // Text settings
 const int TEXT_SIZE = 2;
 const int MID = 120;
@@ -56,33 +52,36 @@ const int CAL_NVS_ADDR = 0;
 double linReg[2];
 // Motor
 bool motorActive = false;
-const int MOTOR_MAX_ACCEL = 200000;
+const int MOTOR_MAX_ACCEL = 300000;
 const int MOTOR_STEPS_PER_S = 6000000;
-const uint16_t currentLimitWhileMoving = 500;
+const uint16_t currentLimitWhileMoving = 750;
 const uint16_t currentLimitWhileStopped = 0;
-const int FORCE_STOP_POS = 600;
+const int FORCE_STOP_POS = 1000;
 int32_t motorPos = 0;
-const int RESET_COMMAND_TIMEOUT = 750;  // ms
-long int motorResetTimeElapsed = 0;
+const int RESET_COMMAND_TIMEOUT = 500;  // ms
+long int motorResetTime = 0;
 // Closed-loop
-// const int LOOP_SAMPLES = 100;
-// int adcCount = 0;
 int16_t adcVal = 0;
 bool adcOnline = false;
 bool doClosedLoop = false;
 int closedLoopPercent = 100;
 const int CLOSED_LOOP_INC = 10;  // percent
-const int ADC_ERROR = 25;        // based on ADC resolution/gain
+const int ADC_ERROR = 40;        // based on ADC resolution/gain
 bool cleanupClosedLoop = false;
 // SD card
 bool sdCard = false;
 const String ANIMAL_FILE = "ANIMAL.TXT";
 const String CALIBRATION_FILE = "CAL.TXT";
+const String DATA_FILE = "DATA.TXT";
 int animalWeight = 0;
 int animalNumber = 0;
+const int LOG_DATA_TIMEOUT = 1000;  // ms
+long int logDataTime = 0;
+const int DATA_INIT = 0;
+const int DATA_LOOP = 1;
 
 void setup() {
-  Serial.begin(9600);
+  // Serial.begin(9600);
   carrier.begin();
   carrier.display.setRotation(0);
 
@@ -101,23 +100,17 @@ void setup() {
     ADS.setGain(16);
   }
 
-  animalFile = SD.open(ANIMAL_FILE, FILE_READ);
-  if (animalFile) {
-    sdCard = true;
-    animalNumber = animalFile.parseInt();
-    animalWeight = animalFile.parseInt();
+  sdFile = SD.open(ANIMAL_FILE, FILE_READ);
+  if (sdFile) {
+    animalNumber = sdFile.parseInt();
+    animalWeight = sdFile.parseInt();
+    sdFile.close();
 
-    animalFile.close();
-    // seems to have some issues, creating files ahead of time
-    if (!SD.exists(CALIBRATION_FILE)) {
-      calibrationFile = SD.open(CALIBRATION_FILE, FILE_WRITE);
-      if (calibrationFile) {
-        calibrationFile.println("0,0,0");  // dummy data
-        calibrationFile.close();
-      }
+    if (loadCalibrationValues()) {  //  & logData(DATA_INIT)
+      sdCard = true;
     }
   }
-  loadCalibrationValues();
+
   tic.setProduct(TicProduct::T825);
   motorOff();
   tic.setMaxAccel(MOTOR_MAX_ACCEL);
@@ -144,28 +137,24 @@ void loop() {
 void buttonsUpdate() {
   // handle button touches
   for (int i = 0; i < 5; i++) {
-    if (millis() - touchMsElapsed[i] > TOUCH_TIMEOUT_MS) {
+    if (millis() - touchTime[i] > TOUCH_TIMEOUT_MS) {
       touch[i] = false;
-      touchMsElapsed[i] = 0;
+      touchTime[i] = 0;
     }
   }
   for (int i = 0; i < 5; i++) {
     if (analogRead(i) > TOUCH_THRESH) {
       touch[i] = true;
-      touchMsElapsed[i] = millis();
+      touchTime[i] = millis();
     }
   }
   // LED display
-  // !! TURN THIS OFF WHEN CLOSING THE LOOP
+  carrier.leds.clear();
   if (lightOn) {
-    carrier.leds.clear();
     for (int i = 0; i < 5; i++) {
       carrier.leds.setPixelColor(i, 255, 255, 255);
     }
-    carrier.leds.setBrightness(255);
-    carrier.leds.show();
   } else {
-    carrier.leds.clear();
     for (int i = 0; i < 5; i++) {
       if (menuMask[i]) {
         if (touch[i]) {
@@ -175,18 +164,17 @@ void buttonsUpdate() {
         }
       }
     }
-    carrier.leds.setBrightness(LED_BRIGHTNESS);
-    carrier.leds.show();
   }
+  carrier.leds.show();
   if (iLED >= 200) LEDdir = 0;
   if (iLED == 20) LEDdir = 1;
   if (LEDdir) iLED++;
   if (!LEDdir) iLED--;
 
   if (motorActive) {
-    if (millis() - motorResetTimeElapsed > RESET_COMMAND_TIMEOUT) {
+    if (millis() - motorResetTime > RESET_COMMAND_TIMEOUT) {
       tic.resetCommandTimeout();
-      motorResetTimeElapsed = millis();
+      motorResetTime = millis();
     }
     motorPos = tic.getCurrentPosition();
     if (abs(motorPos) > FORCE_STOP_POS) {
@@ -194,25 +182,27 @@ void buttonsUpdate() {
       tic.haltAndSetPosition(0);
     }
   }
-  closeMotorLoop();  // reads ADC too
+  if (closeMotorLoop()) {
+    if (millis() - logDataTime > LOG_DATA_TIMEOUT) {
+      logDataTime = millis();
+      // logData(DATA_LOOP);
+    }
+  }
 }
 
-void closeMotorLoop() {
+bool closeMotorLoop() {
+  bool retVal = false;
   if (adcOnline) {
     adcVal = ADS.readADC_Differential_0_1();
-    // stats.add(adcVal / 1.0);
-    // adcCount++;
   }
-  if (adcOnline & motorActive & doClosedLoop) {  //& adcCount > LOOP_SAMPLES
-    // adcCount = 0;
+  if (adcOnline & motorActive & doClosedLoop & sdCard) {
+    retVal = true;
     cleanupClosedLoop = true;  // turn off gracefully
     double targetCraneWeight = ((100 - closedLoopPercent) / 100.0) * animalWeight;
     double targetADC = lr.calculate(targetCraneWeight);
-    // double avgAdc = stats.average();
-    // stats.clear();
-    if (targetADC > calibrationADC[0]) {          // target load should be negative
-      if (abs(adcVal - targetADC) > ADC_ERROR) {  // adcVal
-        if (targetADC < adcVal) {                 // adcVal
+    if (targetADC > calibrationADC[0]) {
+      if (abs(adcVal - targetADC) > ADC_ERROR) {
+        if (targetADC < adcVal) {
           motorDown();
         } else {
           motorUp();
@@ -226,6 +216,7 @@ void closeMotorLoop() {
     cleanupClosedLoop = false;
     motorStop();
   }
+  return retVal;
 }
 
 void screenSaver() {
@@ -271,31 +262,45 @@ void screenSaver() {
 void homeMenu() {
   debounceMenu();
   // centerString(WELCOME_MSG, MID, MID - ROW * 2);  // use +/-ROW
-  centerString("Animal " + String(animalNumber) + ", " + String(animalWeight) + "gr", MID, MID - ROW);
-  String infoString = "";
-  if (motorActive) {
-    infoString = "M[+],";
+  centerString("Animal " + String(animalNumber) + ", " + String(animalWeight) + "g", MID, MID - ROW);
+
+  if (adcOnline & motorActive & doClosedLoop & sdCard) {
+    carrier.display.setTextSize(3);
+    centerString(String(closedLoopPercent) + "%", MID, MID + ROW);
   } else {
-    infoString = "M[-],";
+    String infoString = "";
+    if (motorActive) {
+      infoString = "Motor ON, ";
+    } else {
+      infoString = "Motor OFF, ";
+    }
+    if (doClosedLoop) {
+      infoString += "Loop ON, ";
+    } else {
+      infoString += "Loop OFF, ";
+    }
+    if (adcOnline) {
+      infoString += "ADC+, ";
+    } else {
+      infoString += "(ADC), ";
+    }
+    if (sdCard) {
+      infoString += "SD+";
+    } else {
+      infoString += "(SD)";
+    }
+    carrier.display.setTextSize(1);
+    centerString(infoString, MID, MID);
   }
-  if (adcOnline) {
-    infoString += "ADC[+],";
-  } else {
-    infoString += "ADC[-],";
-  }
-  if (sdCard) {
-    infoString += "SD[+]";
-  } else {
-    infoString += "SD[-]";
-  }
-  centerString(infoString, MID, MID);
-  makeButtonMenu("Cal", "Set", "Motor", "Debug", "Home");
+
+  carrier.display.setTextSize(TEXT_SIZE);
+  makeButtonMenu("Cal", "Unload", "Motor", "Debug", "Home");
 }
 
 void calibrateLoad() {
   doClosedLoop = false;
   debounceMenu();
-  makeButtonMenu("0gr", "100gr", "200gr", "Save", "Home");
+  makeButtonMenu("0g", "100g", "200g", "Save", "Home");
 
   bool doOnce = true;
   while (1) {
@@ -338,30 +343,29 @@ void learnCalibration() {
   lr.parameters(linReg);
 }
 bool saveCalibrationValues() {
-  bool retVal = false;
   if (sdCard) {
     SD.remove(CALIBRATION_FILE);
-    calibrationFile = SD.open(CALIBRATION_FILE, FILE_WRITE);  // overwrite
-    if (calibrationFile) {
-      calibrationFile.println(String(calibrationADC[0]) + "," + String(calibrationADC[1]) + "," + String(calibrationADC[2]));
-      calibrationFile.close();
-      retVal = true;
+    sdFile = SD.open(CALIBRATION_FILE, FILE_WRITE);  // overwrite
+    if (sdFile) {
+      sdFile.println(String(calibrationADC[0]) + "," + String(calibrationADC[1]) + "," + String(calibrationADC[2]));
+      sdFile.close();
+      learnCalibration();
+      return true;
     }
   }
-  learnCalibration();
-  return retVal;
+  return false;
 }
-void loadCalibrationValues() {
-  if (sdCard) {
-    calibrationFile = SD.open(CALIBRATION_FILE, FILE_READ);
-    if (calibrationFile) {
-      calibrationADC[0] = calibrationFile.parseInt();
-      calibrationADC[1] = calibrationFile.parseInt();
-      calibrationADC[2] = calibrationFile.parseInt();
-      calibrationFile.close();
-    }
+bool loadCalibrationValues() {
+  sdFile = SD.open(CALIBRATION_FILE, FILE_READ);
+  if (sdFile) {
+    calibrationADC[0] = sdFile.parseInt();
+    calibrationADC[1] = sdFile.parseInt();
+    calibrationADC[2] = sdFile.parseInt();
+    sdFile.close();
+    learnCalibration();
+    return true;
   }
-  learnCalibration();
+  return false;
 }
 void showCalibrationValues() {
   String calVals = "";
@@ -427,9 +431,11 @@ void setUnload() {
 }
 void showUnloadSettings() {
   clearDataArea();
+  carrier.display.setTextSize(3);
   centerString(String(closedLoopPercent) + "% WB", MID, MID - ROW);
-  centerString("ground: " + String(animalWeight * (closedLoopPercent / 100.0)) + "gr", MID, MID);
-  centerString("crane: " + String(animalWeight * ((100 - closedLoopPercent) / 100.0)) + "gr", MID, MID + ROW);
+  carrier.display.setTextSize(TEXT_SIZE);
+  centerString("ground: " + String(animalWeight * (closedLoopPercent / 100.0)) + "g", MID, MID);
+  centerString("crane: " + String(animalWeight * ((100 - closedLoopPercent) / 100.0)) + "g", MID, MID + ROW);
 }
 
 void manualControl() {
@@ -482,7 +488,7 @@ void manualControl() {
 }
 void showMotorPosition() {
   clearDataArea();
-  centerString(String(motorPos), MID, MID);
+  centerString("Steps: " + String(motorPos), MID, MID);
 }
 
 void debugMode() {
@@ -605,4 +611,31 @@ void motorOff() {
   tic.setCurrentLimit(currentLimitWhileStopped);
   tic.enterSafeStart();  // !!check if working
   motorActive = false;
+}
+
+// DATA HELPERS
+// !! needs to put data in array and save w/out interrupting closed loop
+bool logData(int dataType) {
+  String dataString = "";
+  dataString += dataType;
+  dataString += ",";
+  dataString += String(millis() / 1000);  // !! update if able to set time
+  dataString += ",";
+  if (dataType == 0) {  // init
+    dataString += String(animalNumber);
+    dataString += ",";
+    dataString += String(animalWeight);
+  }
+  if (dataType == 1) {  // closed loop
+    dataString += String(adcVal);
+    dataString += ",";
+    dataString += String((adcVal - linReg[1]) / linReg[0]);
+  }
+  sdFile = SD.open(DATA_FILE, FILE_WRITE);
+  if (sdFile) {
+    sdFile.println(dataString);
+    sdFile.close();
+    return true;
+  }
+  return false;
 }
