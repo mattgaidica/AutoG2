@@ -66,7 +66,7 @@ bool adcOnline = false;
 bool doClosedLoop = false;
 int closedLoopPercent = 100;
 const int CLOSED_LOOP_INC = 10;  // percent
-const int ADC_ERROR = 40;        // based on ADC resolution/gain
+const int ADC_ERROR = 60;        // based on ADC resolution/gain
 bool cleanupClosedLoop = false;
 // SD card
 bool sdCard = false;
@@ -79,9 +79,15 @@ const int LOG_DATA_TIMEOUT = 1000;  // ms
 long int logDataTime = 0;
 const int DATA_INIT = 0;
 const int DATA_LOOP = 1;
+const int SD_BUFFER_SIZE = 512;
+uint8_t dataCol0[SD_BUFFER_SIZE] = { 0 };  // dataType
+int16_t dataCol1[SD_BUFFER_SIZE] = { 0 };  // time
+int16_t dataCol2[SD_BUFFER_SIZE] = { 0 };  // data 1
+int16_t dataCol3[SD_BUFFER_SIZE] = { 0 };  // data 2
+int dataCount = 0;
 
 void setup() {
-  // Serial.begin(9600);
+  Serial.begin(9600);
   carrier.begin();
   carrier.display.setRotation(0);
 
@@ -106,7 +112,8 @@ void setup() {
     animalWeight = sdFile.parseInt();
     sdFile.close();
 
-    if (loadCalibrationValues()) {  //  & logData(DATA_INIT)
+    if (loadCalibrationValues()) {
+      logData(DATA_INIT);
       sdCard = true;
     }
   }
@@ -160,7 +167,11 @@ void buttonsUpdate() {
         if (touch[i]) {
           carrier.leds.setPixelColor(i, 0, 255, 0);
         } else {
-          carrier.leds.setPixelColor(i, iLED, 0, 0);
+          if (doClosedLoop) {
+            carrier.leds.setPixelColor(i, iLED, 0, 0);
+          } else {
+            carrier.leds.setPixelColor(i, 0, 0, iLED);
+          }
         }
       }
     }
@@ -179,13 +190,12 @@ void buttonsUpdate() {
     motorPos = tic.getCurrentPosition();
     if (abs(motorPos) > FORCE_STOP_POS) {
       motorOff();
-      tic.haltAndSetPosition(0);
     }
   }
   if (closeMotorLoop()) {
     if (millis() - logDataTime > LOG_DATA_TIMEOUT) {
       logDataTime = millis();
-      // logData(DATA_LOOP);
+      logData(DATA_LOOP);
     }
   }
 }
@@ -202,6 +212,7 @@ bool closeMotorLoop() {
     double targetADC = lr.calculate(targetCraneWeight);
     if (targetADC > calibrationADC[0]) {
       if (abs(adcVal - targetADC) > ADC_ERROR) {
+        Serial.println("adc: " + String(adcVal) + ", target: " + String(targetADC));
         if (targetADC < adcVal) {
           motorDown();
         } else {
@@ -210,7 +221,11 @@ bool closeMotorLoop() {
       } else {
         motorStop();
       }
+    } else {
+      motorStop();
     }
+  } else {
+    motorStop();
   }
   if (!doClosedLoop & cleanupClosedLoop) {  // if closed loop recently turned off
     cleanupClosedLoop = false;
@@ -431,11 +446,11 @@ void setUnload() {
 }
 void showUnloadSettings() {
   clearDataArea();
+  centerString("ground: " + String(animalWeight * (closedLoopPercent / 100.0)) + "g", MID, MID - ROW * 2);
+  centerString("crane: " + String(animalWeight * ((100 - closedLoopPercent) / 100.0)) + "g", MID, MID - ROW);
   carrier.display.setTextSize(3);
-  centerString(String(closedLoopPercent) + "% WB", MID, MID - ROW);
+  centerString(String(closedLoopPercent) + "% WB", MID, MID + ROW);
   carrier.display.setTextSize(TEXT_SIZE);
-  centerString("ground: " + String(animalWeight * (closedLoopPercent / 100.0)) + "g", MID, MID);
-  centerString("crane: " + String(animalWeight * ((100 - closedLoopPercent) / 100.0)) + "g", MID, MID + ROW);
 }
 
 void manualControl() {
@@ -608,34 +623,39 @@ void motorOn() {
   tic.exitSafeStart();
 }
 void motorOff() {
+  tic.haltAndSetPosition(0);
   tic.setCurrentLimit(currentLimitWhileStopped);
-  tic.enterSafeStart();  // !!check if working
+  tic.enterSafeStart();
   motorActive = false;
+  doClosedLoop = false;
 }
 
 // DATA HELPERS
 // !! needs to put data in array and save w/out interrupting closed loop
-bool logData(int dataType) {
-  String dataString = "";
-  dataString += dataType;
-  dataString += ",";
-  dataString += String(millis() / 1000);  // !! update if able to set time
-  dataString += ",";
+// dataType, time, data1, data2
+void logData(int dataType) {
+  dataCol0[dataCount] = dataType;
+  dataCol1[dataCount] = millis() / 1000;
   if (dataType == 0) {  // init
-    dataString += String(animalNumber);
-    dataString += ",";
-    dataString += String(animalWeight);
+    dataCol2[dataCount] = animalNumber;
+    dataCol3[dataCount] = animalWeight;
   }
   if (dataType == 1) {  // closed loop
-    dataString += String(adcVal);
-    dataString += ",";
-    dataString += String((adcVal - linReg[1]) / linReg[0]);
+    dataCol2[dataCount] = adcVal;
+    dataCol3[dataCount] = (adcVal - linReg[1]) / linReg[0];
   }
-  sdFile = SD.open(DATA_FILE, FILE_WRITE);
-  if (sdFile) {
-    sdFile.println(dataString);
-    sdFile.close();
-    return true;
+  dataCount++;
+  if (dataCount == SD_BUFFER_SIZE) {
+    motorStop();
+    carrier.leds.clear();
+    carrier.leds.show();
+    sdFile = SD.open(DATA_FILE, FILE_WRITE);
+    if (sdFile) {
+      dataCount = 0;
+      for (int i = 0; i < SD_BUFFER_SIZE; i++) {
+        sdFile.println(String(dataCol0[i]) + "," + String(dataCol1[i]) + "," + String(dataCol2[i]) + "," + String(dataCol3[i]));
+      }
+      sdFile.close();
+    }
   }
-  return false;
 }
