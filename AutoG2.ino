@@ -52,14 +52,18 @@ const int CAL_NVS_ADDR = 0;
 double linReg[2];
 // Motor
 bool motorActive = false;
-const int MOTOR_MAX_ACCEL = 300000;
-const int MOTOR_STEPS_PER_S = 6000000;
-const uint16_t currentLimitWhileMoving = 750;
+const uint32_t MOTOR_MAX_ACCEL = 800000;
+const uint32_t MOTOR_STEPS_PER_S = 500000000;
+const uint16_t currentLimitWhileMoving = 1000;
 const uint16_t currentLimitWhileStopped = 0;
-const int FORCE_STOP_POS = 1000;
+const int FORCE_STOP_POS = 10000;
 int32_t motorPos = 0;
 const int RESET_COMMAND_TIMEOUT = 500;  // ms
 long int motorResetTime = 0;
+int curMotorState = 0;
+const uint32_t MOTOR_STATE_UP = -1;
+const uint32_t MOTOR_STATE_DOWN = 1;
+const uint32_t MOTOR_STATE_STOP = 0;
 // Closed-loop
 int16_t adcVal = 0;
 bool adcOnline = false;
@@ -119,9 +123,11 @@ void setup() {
   }
 
   tic.setProduct(TicProduct::T825);
+  tic.reset();
   motorOff();
   tic.setMaxAccel(MOTOR_MAX_ACCEL);
   tic.setMaxDecel(MOTOR_MAX_ACCEL);
+  tic.setStepMode(TicStepMode::Microstep16);
   tic.haltAndSetPosition(0);
   homeMenu();
 }
@@ -212,7 +218,6 @@ bool closeMotorLoop() {
     double targetADC = lr.calculate(targetCraneWeight);
     if (targetADC > calibrationADC[0]) {
       if (abs(adcVal - targetADC) > ADC_ERROR) {
-        Serial.println("adc: " + String(adcVal) + ", target: " + String(targetADC));
         if (targetADC < adcVal) {
           motorDown();
         } else {
@@ -609,25 +614,37 @@ void makeButtonMenu(const String &buf0, const String &buf1, const String &buf2, 
 
 // MOTOR HELPERS
 void motorStop() {
-  tic.setTargetVelocity(0);
+  if (curMotorState != MOTOR_STATE_STOP) {
+    tic.setTargetVelocity(0);
+    curMotorState = MOTOR_STATE_STOP;
+  }
 }
 void motorUp() {
-  tic.setTargetVelocity(-MOTOR_STEPS_PER_S);
+  if (curMotorState != MOTOR_STATE_UP) {
+    tic.setTargetVelocity(MOTOR_STATE_UP * MOTOR_STEPS_PER_S);
+    curMotorState = MOTOR_STATE_UP;
+  }
 }
 void motorDown() {
-  tic.setTargetVelocity(MOTOR_STEPS_PER_S);
+  if (curMotorState != MOTOR_STATE_DOWN) {
+    tic.setTargetVelocity(MOTOR_STATE_DOWN * MOTOR_STEPS_PER_S);
+    curMotorState = MOTOR_STATE_DOWN;
+  }
 }
 void motorOn() {
   motorActive = true;
   tic.setCurrentLimit(currentLimitWhileMoving);
+  tic.energize();
   tic.exitSafeStart();
 }
 void motorOff() {
   tic.haltAndSetPosition(0);
+  tic.deenergize();
   tic.setCurrentLimit(currentLimitWhileStopped);
   tic.enterSafeStart();
   motorActive = false;
   doClosedLoop = false;
+  curMotorState = MOTOR_STATE_STOP;
 }
 
 // DATA HELPERS
