@@ -65,6 +65,8 @@ const uint32_t MOTOR_STATE_UP = -1;
 const uint32_t MOTOR_STATE_DOWN = 1;
 const uint32_t MOTOR_STATE_STOP = 0;
 // Closed-loop
+const int neg_pin = A5;
+const int pos_pin = A6;
 int16_t adcVal = 0;
 bool adcOnline = false;
 bool doClosedLoop = false;
@@ -106,7 +108,7 @@ void setup() {
 
   ADS.begin();
   if (ADS.isConnected()) {
-    adcOnline = true;
+  adcOnline = true;
     ADS.setGain(16);
   }
 
