@@ -2,18 +2,23 @@
 // y = m(x) + b
 // ADC = m(crane weight (grams)) + b
 /*
- |
-A|              x
-D|        x
-C|  x
- |___________________
-    0    100   200
-   crane weight (gr)
+  |
+A |              x
+D |        x
+C |  x
+  |___________________
+  0    100   200
+  crane weight (gr)
 */
 #include <Arduino_MKRIoTCarrier.h>
 #include <ADS1X15.h>
 #include <Tic.h>
 #include <LinearRegression.h>
+
+#include </Users/matt/Documents/Arduino/AutoG2/iot_secrets.h>
+
+#include <ArduinoIoTCloud.h>
+#include <Arduino_ConnectionHandler.h>
 
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
@@ -64,7 +69,7 @@ int curMotorState = 0;
 const uint32_t MOTOR_STATE_UP = -1;
 const uint32_t MOTOR_STATE_DOWN = 1;
 const uint32_t MOTOR_STATE_STOP = 0;
-// Closed-loop
+// ADC + Closed-loop
 const int neg_pin = A5;
 const int pos_pin = A6;
 int16_t adcVal = 0;
@@ -74,6 +79,7 @@ int closedLoopPercent = 100;
 const int CLOSED_LOOP_INC = 10;  // percent
 const int ADC_ERROR = 60;        // based on ADC resolution/gain
 bool cleanupClosedLoop = false;
+int adcGrams = 0;
 // SD card
 bool sdCard = false;
 const String ANIMAL_FILE = "ANIMAL.TXT";
@@ -91,6 +97,12 @@ int16_t dataCol1[SD_BUFFER_SIZE] = { 0 };  // time
 int16_t dataCol2[SD_BUFFER_SIZE] = { 0 };  // data 1
 int16_t dataCol3[SD_BUFFER_SIZE] = { 0 };  // data 2
 int dataCount = 0;
+// IoT
+WiFiConnectionHandler ArduinoIoTPreferredConnection(SECRET_SSID, SECRET_PASS);
+const int IOT_TIMEOUT = 1000;  // ms
+long int iotTime = 0;
+float temperature = 0;
+float humidity = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -130,8 +142,15 @@ void setup() {
   motorOff();
   tic.setMaxAccel(MOTOR_MAX_ACCEL);
   tic.setMaxDecel(MOTOR_MAX_ACCEL);
-  tic.setStepMode(TicStepMode::Microstep16);
+  tic.setStepMode(TicStepMode:: );
   tic.haltAndSetPosition(0);
+
+  // IoT
+  initProperties();
+  ArduinoCloud.begin(ArduinoIoTPreferredConnection, false);  // turn off watchdog for long updates
+  setDebugMessageLevel(2);
+  ArduinoCloud.printDebugInfo();
+
   homeMenu();
 }
 
@@ -147,6 +166,17 @@ void loop() {
   if (touch[MENU_MANUAL]) manualControl();
   if (touch[MENU_DEBUG]) debugMode();
   if (touch[MENU_HOME]) refreshTime = millis();
+}
+
+void initProperties() {
+  ArduinoCloud.setThingId("c443ac0d-a863-4f40-a85f-1ebb71a3cbdb");
+  // ArduinoCloud.addProperty(led, WRITE, ON_CHANGE, onLedChange);
+  // ArduinoCloud.addProperty(seconds, READ, ON_CHANGE);
+  ArduinoCloud.addProperty(adcGrams, READ, ON_CHANGE);
+  ArduinoCloud.addProperty(motorActive, READ, ON_CHANGE);
+  ArduinoCloud.addProperty(sdCard, READ, ON_CHANGE);
+  ArduinoCloud.addProperty(doClosedLoop, READ, ON_CHANGE);
+  ArduinoCloud.addProperty(temperature, READ, ON_CHANGE);
 }
 
 // has to run everywhere: updates buttons, motor keep-alive
@@ -207,12 +237,24 @@ void buttonsUpdate() {
       logData(DATA_LOOP);
     }
   }
+
+  if (millis() - iotTime > IOT_TIMEOUT) {
+    iotTime = millis();
+    temperature = carrier.Env.readTemperature(FAHRENHEIT);
+    humidity = carrier.Env.readHumidity();
+    ArduinoCloud.update();
+  }
+}
+
+void readADC() {
+  adcVal = ADS.readADC_Differential_0_1();
+  adcGrams = int((double(adcVal) - linReg[1]) / linReg[0]);  // use int for IoT
 }
 
 bool closeMotorLoop() {
   bool retVal = false;
   if (adcOnline) {
-    adcVal = ADS.readADC_Differential_0_1();
+    readADC();
   }
   if (adcOnline & motorActive & doClosedLoop & sdCard) {
     retVal = true;
@@ -336,7 +378,7 @@ void calibrateLoad() {
     if (touch[0] | touch[1] | touch[2]) {
       if (doRefresh(250)) {
         adcVal = 0;
-        if (adcOnline) adcVal = ADS.readADC_Differential_0_1();
+        if (adcOnline) readADC();
         for (int i = 0; i < 3; i++) {
           if (touch[i]) calibrationADC[i] = adcVal;
         }
@@ -525,10 +567,10 @@ void debugMode() {
     if (doRefresh(2000) | doOnce) {
       doOnce = false;
       clearDataArea();
-      float temperature = carrier.Env.readTemperature(FAHRENHEIT);
-      float humidity = carrier.Env.readHumidity();
+      // float temperature = carrier.Env.readTemperature(FAHRENHEIT);
+      // float humidity = carrier.Env.readHumidity();
       char buffer[30];
-      if (adcOnline) adcVal = ADS.readADC_Differential_0_1();
+      if (adcOnline) readADC();
       sprintf(buffer, "t: 0x%X, %is", millis() / 1000, millis() / 1000);
       centerString(buffer, MID, MID - ROW);
       sprintf(buffer, "Wx: %1.0fF, %1.0f%%", temperature, humidity);
@@ -651,7 +693,7 @@ void motorOff() {
 }
 
 // DATA HELPERS
-// !! needs to put data in array and save w/out interrupting closed loop
+// !! need light, target unload
 // dataType, time, data1, data2
 void logData(int dataType) {
   dataCol0[dataCount] = dataType;
@@ -662,7 +704,7 @@ void logData(int dataType) {
   }
   if (dataType == 1) {  // closed loop
     dataCol2[dataCount] = adcVal;
-    dataCol3[dataCount] = (adcVal - linReg[1]) / linReg[0];
+    dataCol3[dataCount] = adcGrams;
   }
   dataCount++;
   if (dataCount == SD_BUFFER_SIZE) {
