@@ -108,7 +108,7 @@ void setup() {
 
   ADS.begin();
   if (ADS.isConnected()) {
-  adcOnline = true;
+    adcOnline = true;
     ADS.setGain(16);
   }
 
@@ -124,6 +124,7 @@ void setup() {
     }
   }
 
+  // tic set thru USB > Advanced: [Pin configuration] RX = kill switch, [Soft error response] De-energize
   tic.setProduct(TicProduct::T825);
   tic.reset();
   motorOff();
