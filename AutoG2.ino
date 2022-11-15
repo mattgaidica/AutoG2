@@ -1,4 +1,5 @@
 // BLACK, WHITE, RED, GREEN, BLUE, CYAN, MAGENTA, YELLOW, ORANGE
+// Note: port 8883 must be allowed thru firewall
 // y = m(x) + b
 // ADC = m(crane weight (grams)) + b
 /*
@@ -15,7 +16,7 @@ C |  x
 #include <Tic.h>
 #include <LinearRegression.h>
 
-#include </Users/matt/Documents/Arduino/AutoG2/iot_secrets.h>
+#include </Users/matt/Documents/Arduino/AutoG2/iot_secrets_um.h>
 
 #include <ArduinoIoTCloud.h>
 #include <Arduino_ConnectionHandler.h>
@@ -25,6 +26,8 @@ ADS1115 ADS(0x48);
 TicI2C tic;
 LinearRegression lr = LinearRegression();
 File sdFile;
+
+float version = 1.0;
 
 // Menus
 bool touch[5] = { 0 };
@@ -103,6 +106,7 @@ const int IOT_TIMEOUT = 1000;  // ms
 long int iotTime = 0;
 float temperature = 0;
 float humidity = 0;
+bool killSwitch = killSwitch;
 
 void setup() {
   Serial.begin(9600);
@@ -142,7 +146,7 @@ void setup() {
   motorOff();
   tic.setMaxAccel(MOTOR_MAX_ACCEL);
   tic.setMaxDecel(MOTOR_MAX_ACCEL);
-  tic.setStepMode(TicStepMode:: );
+  tic.setStepMode(TicStepMode::Microstep32);
   tic.haltAndSetPosition(0);
 
   // IoT
@@ -169,14 +173,19 @@ void loop() {
 }
 
 void initProperties() {
-  ArduinoCloud.setThingId("c443ac0d-a863-4f40-a85f-1ebb71a3cbdb");
-  // ArduinoCloud.addProperty(led, WRITE, ON_CHANGE, onLedChange);
-  // ArduinoCloud.addProperty(seconds, READ, ON_CHANGE);
-  ArduinoCloud.addProperty(adcGrams, READ, ON_CHANGE);
-  ArduinoCloud.addProperty(motorActive, READ, ON_CHANGE);
-  ArduinoCloud.addProperty(sdCard, READ, ON_CHANGE);
-  ArduinoCloud.addProperty(doClosedLoop, READ, ON_CHANGE);
-  ArduinoCloud.addProperty(temperature, READ, ON_CHANGE);
+  // ArduinoCloud.setThingId("c443ac0d-a863-4f40-a85f-1ebb71a3cbdb"); // AutoG0
+  ArduinoCloud.setThingId("d9f22913-a94c-4278-81d5-8f7374b91c9e"); // AutoG1
+  ArduinoCloud.addProperty(adcGrams, READ, 1 * SECONDS, NULL);
+  ArduinoCloud.addProperty(motorActive, READ, ON_CHANGE, NULL);
+  ArduinoCloud.addProperty(killSwitch, READWRITE, ON_CHANGE, onKillSwitchChange);
+  ArduinoCloud.addProperty(sdCard, READ, ON_CHANGE, NULL);
+  ArduinoCloud.addProperty(doClosedLoop, READ, ON_CHANGE, NULL);
+  ArduinoCloud.addProperty(temperature, READ, ON_CHANGE, NULL);
+  ArduinoCloud.addProperty(humidity, READ, ON_CHANGE, NULL);
+  ArduinoCloud.addProperty(version, READ, ON_CHANGE, NULL);
+}
+void onKillSwitchChange() {
+  motorOff();
 }
 
 // has to run everywhere: updates buttons, motor keep-alive
