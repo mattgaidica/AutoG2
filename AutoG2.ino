@@ -16,7 +16,9 @@ C |  x
 #include <Tic.h>
 #include <LinearRegression.h>
 
-#include </Users/matt/Documents/Arduino/AutoG2/iot_secrets_um.h>
+// #include </Users/matt/Documents/Arduino/AutoG2/iot_secrets_um.h>
+#include </Users/matt/Documents/Arduino/AutoG2/iot_secrets.h>
+#include </Users/matt/Documents/Arduino/AutoG2/iot_things.h>
 
 #include <ArduinoIoTCloud.h>
 #include <Arduino_ConnectionHandler.h>
@@ -106,7 +108,9 @@ const int IOT_TIMEOUT = 1000;  // ms
 long int iotTime = 0;
 float temperature = 0;
 float humidity = 0;
-bool killSwitch = killSwitch;
+bool killSwitch = false;
+unsigned long localTime = 0;
+String experiment = "";
 
 void setup() {
   Serial.begin(9600);
@@ -150,7 +154,7 @@ void setup() {
   tic.haltAndSetPosition(0);
 
   // IoT
-  initProperties();
+  initIotProperties();
   ArduinoCloud.begin(ArduinoIoTPreferredConnection, false);  // turn off watchdog for long updates
   setDebugMessageLevel(2);
   ArduinoCloud.printDebugInfo();
@@ -172,18 +176,33 @@ void loop() {
   if (touch[MENU_HOME]) refreshTime = millis();
 }
 
-void initProperties() {
-  // ArduinoCloud.setThingId("c443ac0d-a863-4f40-a85f-1ebb71a3cbdb"); // AutoG0
-  ArduinoCloud.setThingId("d9f22913-a94c-4278-81d5-8f7374b91c9e"); // AutoG1
-  ArduinoCloud.addProperty(adcGrams, READ, 1 * SECONDS, NULL);
-  ArduinoCloud.addProperty(motorActive, READ, ON_CHANGE, NULL);
-  ArduinoCloud.addProperty(killSwitch, READWRITE, ON_CHANGE, onKillSwitchChange);
-  ArduinoCloud.addProperty(sdCard, READ, ON_CHANGE, NULL);
-  ArduinoCloud.addProperty(doClosedLoop, READ, ON_CHANGE, NULL);
-  ArduinoCloud.addProperty(temperature, READ, ON_CHANGE, NULL);
-  ArduinoCloud.addProperty(humidity, READ, ON_CHANGE, NULL);
-  ArduinoCloud.addProperty(version, READ, ON_CHANGE, NULL);
+
+void initIotProperties() {
+  byte mac[5];
+  WiFi.macAddress(mac);
+
+  bool doProperties = true;
+  if (memcmp(mac, MAC_G0, 5) == 0) {
+    ArduinoCloud.setThingId(THING_ID_G0);
+  } else if (memcmp(mac, MAC_G1, 5) == 0) {
+    ArduinoCloud.setThingId(THING_ID_G1);
+  } else {
+    doProperties = false;
+  }
+
+  if (doProperties) {
+    ArduinoCloud.addProperty(adcGrams, READ, 1 * SECONDS, NULL);
+    ArduinoCloud.addProperty(motorActive, READ, ON_CHANGE, NULL);
+    ArduinoCloud.addProperty(killSwitch, READWRITE, ON_CHANGE, onKillSwitchChange);
+    ArduinoCloud.addProperty(sdCard, READ, ON_CHANGE, NULL);
+    ArduinoCloud.addProperty(doClosedLoop, READ, ON_CHANGE, NULL);
+    ArduinoCloud.addProperty(temperature, READ, ON_CHANGE, NULL);
+    ArduinoCloud.addProperty(humidity, READ, ON_CHANGE, NULL);
+    ArduinoCloud.addProperty(version, READ, ON_CHANGE, NULL);
+    ArduinoCloud.addProperty(experiment, READ, ON_CHANGE, NULL);
+  }
 }
+
 void onKillSwitchChange() {
   motorOff();
 }
@@ -249,8 +268,10 @@ void buttonsUpdate() {
 
   if (millis() - iotTime > IOT_TIMEOUT) {
     iotTime = millis();
+    localTime = ArduinoCloud.getLocalTime();
     temperature = carrier.Env.readTemperature(FAHRENHEIT);
     humidity = carrier.Env.readHumidity();
+    experiment = "Animal " + String(animalNumber) + ", " + String(animalWeight) + "g" + " (" + String(closedLoopPercent) + "%)";
     ArduinoCloud.update();
   }
 }
