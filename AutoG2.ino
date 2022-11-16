@@ -217,6 +217,7 @@ void buttonsUpdate() {
     }
   }
   for (int i = 0; i < 5; i++) {
+    // rep with carrier.Buttons.getTouch(TOUCH0)?
     if (analogRead(i) > TOUCH_THRESH) {
       touch[i] = true;
       touchTime[i] = millis();
@@ -272,6 +273,7 @@ void buttonsUpdate() {
     temperature = carrier.Env.readTemperature(FAHRENHEIT);
     humidity = carrier.Env.readHumidity();
     experiment = "Animal " + String(animalNumber) + ", " + String(animalWeight) + "g" + " (" + String(closedLoopPercent) + "%)";
+
     ArduinoCloud.update();
   }
 }
