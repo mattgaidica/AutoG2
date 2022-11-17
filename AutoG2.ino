@@ -15,9 +15,10 @@ C |  x
 #include <ADS1X15.h>
 #include <Tic.h>
 #include <LinearRegression.h>
+#include <TimeLib.h>
 
-// #include </Users/matt/Documents/Arduino/AutoG2/iot_secrets_um.h>
-#include </Users/matt/Documents/Arduino/AutoG2/iot_secrets.h>
+#include </Users/matt/Documents/Arduino/AutoG2/iot_secrets_um.h>
+// #include </Users/matt/Documents/Arduino/AutoG2/iot_secrets.h>
 #include </Users/matt/Documents/Arduino/AutoG2/iot_things.h>
 
 #include <ArduinoIoTCloud.h>
@@ -29,7 +30,7 @@ TicI2C tic;
 LinearRegression lr = LinearRegression();
 File sdFile;
 
-float version = 1.0;
+float version = 1.1;
 
 // Menus
 bool touch[5] = { 0 };
@@ -107,10 +108,11 @@ WiFiConnectionHandler ArduinoIoTPreferredConnection(SECRET_SSID, SECRET_PASS);
 const int IOT_TIMEOUT = 1000;  // ms
 long int iotTime = 0;
 float temperature = 0;
-float humidity = 0;
+const float TEMP_OFFSET = -12.0;
 bool killSwitch = false;
-unsigned long localTime = 0;
+CloudTime localTime;
 String experiment = "";
+bool iotConnected = false;
 
 void setup() {
   Serial.begin(9600);
@@ -197,9 +199,9 @@ void initIotProperties() {
     ArduinoCloud.addProperty(sdCard, READ, ON_CHANGE, NULL);
     ArduinoCloud.addProperty(doClosedLoop, READ, ON_CHANGE, NULL);
     ArduinoCloud.addProperty(temperature, READ, ON_CHANGE, NULL);
-    ArduinoCloud.addProperty(humidity, READ, ON_CHANGE, NULL);
     ArduinoCloud.addProperty(version, READ, ON_CHANGE, NULL);
     ArduinoCloud.addProperty(experiment, READ, ON_CHANGE, NULL);
+    ArduinoCloud.addProperty(localTime, READ, ON_CHANGE, NULL);
   }
 }
 
@@ -270,10 +272,14 @@ void buttonsUpdate() {
   if (millis() - iotTime > IOT_TIMEOUT) {
     iotTime = millis();
     localTime = ArduinoCloud.getLocalTime();
-    temperature = carrier.Env.readTemperature(FAHRENHEIT);
-    humidity = carrier.Env.readHumidity();
+    temperature = carrier.Env.readTemperature(FAHRENHEIT) + TEMP_OFFSET;
     experiment = "Animal " + String(animalNumber) + ", " + String(animalWeight) + "g" + " (" + String(closedLoopPercent) + "%)";
 
+    if (ArduinoCloud.connected()) {
+      iotConnected = true;
+    } else {
+      iotConnected = false;
+    }
     ArduinoCloud.update();
   }
 }
@@ -599,15 +605,18 @@ void debugMode() {
     if (doRefresh(2000) | doOnce) {
       doOnce = false;
       clearDataArea();
-      // float temperature = carrier.Env.readTemperature(FAHRENHEIT);
-      // float humidity = carrier.Env.readHumidity();
+      String iotString;
+      if (iotConnected) {
+        iotString = "IoT Connected";
+      } else {
+        iotString = "IoT Disconnected";
+      }
+      centerString(iotString, MID, MID - ROW);
       char buffer[30];
       if (adcOnline) readADC();
-      sprintf(buffer, "t: 0x%X, %is", millis() / 1000, millis() / 1000);
-      centerString(buffer, MID, MID - ROW);
-      sprintf(buffer, "Wx: %1.0fF, %1.0f%%", temperature, humidity);
-      centerString(buffer, MID, MID);  // use +/-ROW
-      centerString("load: " + String(adcVal), MID, MID + ROW);
+      sprintf(buffer, "t: %i:%i:%i (%is)", hour(localTime), minute(localTime), second(localTime), millis() / 1000);
+      centerString(buffer, MID, MID);
+      centerString("ADC: " + String(adcVal) + " (" + String(adcGrams) + "g)", MID, MID + ROW);
     }
 
     if (touch[0]) {
