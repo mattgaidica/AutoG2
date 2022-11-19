@@ -17,8 +17,8 @@ C |  x
 #include <LinearRegression.h>
 #include <TimeLib.h>
 
-#include </Users/matt/Documents/Arduino/AutoG2/iot_secrets_um.h>
-// #include </Users/matt/Documents/Arduino/AutoG2/iot_secrets.h>
+// #include </Users/matt/Documents/Arduino/AutoG2/iot_secrets_um.h>
+#include </Users/matt/Documents/Arduino/AutoG2/iot_secrets.h>
 #include </Users/matt/Documents/Arduino/AutoG2/iot_things.h>
 
 #include <ArduinoIoTCloud.h>
@@ -63,8 +63,8 @@ const int CAL_NVS_ADDR = 0;
 double linReg[2];
 // Motor
 bool motorActive = false;
-const uint32_t MOTOR_MAX_ACCEL = 800000;
-const uint32_t MOTOR_STEPS_PER_S = 500000000;
+const uint32_t MOTOR_MAX_ACCEL = 1000000;
+const uint32_t MOTOR_STEPS_PER_S = 800000000;
 const uint16_t currentLimitWhileMoving = 1000;
 const uint16_t currentLimitWhileStopped = 0;
 const int FORCE_STOP_POS = 10000;
@@ -156,6 +156,7 @@ void setup() {
   tic.haltAndSetPosition(0);
 
   // IoT
+  // !! this is blocking, need to timeout after n-tries
   initIotProperties();
   ArduinoCloud.begin(ArduinoIoTPreferredConnection, false);  // turn off watchdog for long updates
   setDebugMessageLevel(2);
