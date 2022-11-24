@@ -102,13 +102,12 @@ uint8_t dataCol0[SD_BUFFER_SIZE] = { 0 };  // dataType
 int16_t dataCol1[SD_BUFFER_SIZE] = { 0 };  // time
 int16_t dataCol2[SD_BUFFER_SIZE] = { 0 };  // data 1
 int16_t dataCol3[SD_BUFFER_SIZE] = { 0 };  // data 2
+uint32_t dataCols[5][SD_BUFFER_SIZE] = { 0 };
 int dataCount = 0;
 // IoT
 WiFiConnectionHandler ArduinoIoTPreferredConnection(SECRET_SSID, SECRET_PASS);
 const int IOT_TIMEOUT = 1000;  // ms
 long int iotTime = 0;
-float temperature = 0;
-const float TEMP_OFFSET = -12.0;
 bool killSwitch = false;
 CloudTime localTime;
 String experiment = "";
@@ -199,10 +198,11 @@ void initIotProperties() {
     ArduinoCloud.addProperty(killSwitch, READWRITE, ON_CHANGE, onKillSwitchChange);
     ArduinoCloud.addProperty(sdCard, READ, ON_CHANGE, NULL);
     ArduinoCloud.addProperty(doClosedLoop, READ, ON_CHANGE, NULL);
-    ArduinoCloud.addProperty(temperature, READ, ON_CHANGE, NULL);
     ArduinoCloud.addProperty(version, READ, ON_CHANGE, NULL);
     ArduinoCloud.addProperty(experiment, READ, ON_CHANGE, NULL);
     ArduinoCloud.addProperty(localTime, READ, ON_CHANGE, NULL);
+    ArduinoCloud.addProperty(version, READ, ON_CHANGE, NULL);
+    ArduinoCloud.addProperty(closedLoopPercent, READWRITE, ON_CHANGE, NULL);
   }
 }
 
@@ -273,8 +273,7 @@ void buttonsUpdate() {
   if (millis() - iotTime > IOT_TIMEOUT) {
     iotTime = millis();
     localTime = ArduinoCloud.getLocalTime();
-    temperature = carrier.Env.readTemperature(FAHRENHEIT) + TEMP_OFFSET;
-    experiment = "Animal " + String(animalNumber) + ", " + String(animalWeight) + "g" + " (" + String(closedLoopPercent) + "%)";
+    experiment = "Animal " + String(animalNumber) + ", " + String(animalWeight) + "g" + " (" + String(version) + "%)";
 
     if (ArduinoCloud.connected()) {
       iotConnected = true;
@@ -735,30 +734,41 @@ void motorOff() {
 }
 
 // DATA HELPERS
-// !! need light, target unload
+// !! target unload
 // dataType, time, data1, data2
 void logData(int dataType) {
-  dataCol0[dataCount] = dataType;
-  dataCol1[dataCount] = millis() / 1000;
+  dataCols[0][dataCount] = dataCount;
+  dataCols[1][dataCount] = millis() / 1000;
+  dataCols[2][dataCount] = localTime;
   if (dataType == 0) {  // init
-    dataCol2[dataCount] = animalNumber;
-    dataCol3[dataCount] = animalWeight;
+    dataCols[3][dataCount] = animalNumber;
+    dataCols[4][dataCount] = animalWeight;
+    dataCols[5][dataCount] = 0;  // null
   }
   if (dataType == 1) {  // closed loop
-    dataCol2[dataCount] = adcVal;
-    dataCol3[dataCount] = adcGrams;
+    dataCols[3][dataCount] = adcVal;
+    dataCols[4][dataCount] = adcGrams;
+    dataCols[5][dataCount] = closedLoopPercent;
   }
   dataCount++;
   if (dataCount == SD_BUFFER_SIZE) {
-    motorStop();
+    motorStop();  // pause the motor
     carrier.leds.clear();
     carrier.leds.show();
     sdFile = SD.open(DATA_FILE, FILE_WRITE);
     if (sdFile) {
       dataCount = 0;
       for (int i = 0; i < SD_BUFFER_SIZE; i++) {
-        sdFile.println(String(dataCol0[i]) + "," + String(dataCol1[i]) + "," + String(dataCol2[i]) + "," + String(dataCol3[i]));
+        String serialString = "";
+        for (int j = 0; j < 5; j++) {
+          serialString += String(dataCols[j][i]);
+          if (j < 4) {
+            serialString += ",";
+          }
+        }
+        sdFile.println(serialString);
       }
+
       sdFile.close();
     }
   }
