@@ -106,7 +106,8 @@ uint32_t dataCols[5][SD_BUFFER_SIZE] = { 0 };
 int dataCount = 0;
 // IoT
 WiFiConnectionHandler ArduinoIoTPreferredConnection(SECRET_SSID, SECRET_PASS);
-const int IOT_TIMEOUT = 1000;  // ms
+const int IOT_INIT_TIMEOUT = 20000;
+const int IOT_REFRESH = 5000;  // ms
 long int iotTime = 0;
 bool killSwitch = false;
 CloudTime localTime;
@@ -114,7 +115,10 @@ String experiment = "";
 bool iotConnected = false;
 
 void setup() {
+  /* Initialize serial and wait up to 5 seconds for port to open */
   Serial.begin(9600);
+  for (unsigned long const serialBeginTime = millis(); !Serial && (millis() - serialBeginTime > 5000);) {}
+
   carrier.begin();
   carrier.display.setRotation(0);
 
@@ -158,10 +162,35 @@ void setup() {
   // !! this is blocking, need to timeout after n-tries
   initIotProperties();
   ArduinoCloud.begin(ArduinoIoTPreferredConnection, false);  // turn off watchdog for long updates
-  setDebugMessageLevel(2);
+  ArduinoCloud.addCallback(ArduinoIoTCloudEvent::CONNECT, doThisOnConnect);
+  ArduinoCloud.addCallback(ArduinoIoTCloudEvent::SYNC, doThisOnSync);
+  ArduinoCloud.addCallback(ArduinoIoTCloudEvent::DISCONNECT, doThisOnDisconnect);
+  setDebugMessageLevel(DBG_INFO);
   ArduinoCloud.printDebugInfo();
 
+  iotTime = millis();
+  while (!iotConnected) {
+    ArduinoCloud.update();
+    if (millis() - iotTime > IOT_INIT_TIMEOUT) {
+      Serial.println("IOT init timeout!");
+      break;
+    }
+  }
+  iotTime = 0;
+  
   homeMenu();
+}
+
+void doThisOnConnect() {
+  Serial.println("Board successfully connected to Arduino IoT Cloud");
+  iotConnected = true;
+}
+void doThisOnSync() {
+  Serial.println("Thing Properties synchronised");
+}
+void doThisOnDisconnect() {
+  Serial.println("Board disconnected from Arduino IoT Cloud");
+  iotConnected = false;
 }
 
 void loop() {
@@ -266,21 +295,19 @@ void buttonsUpdate() {
   if (closeMotorLoop()) {
     if (millis() - logDataTime > LOG_DATA_TIMEOUT) {
       logDataTime = millis();
-      logData(DATA_LOOP);
+      Serial.println("Logging data");
+      // logData(DATA_LOOP);
     }
   }
 
-  if (millis() - iotTime > IOT_TIMEOUT) {
+  if (millis() - iotTime > IOT_REFRESH) {
+    Serial.println("Syncing cloud...");
     iotTime = millis();
     localTime = ArduinoCloud.getLocalTime();
     experiment = "Animal " + String(animalNumber) + ", " + String(animalWeight) + "g" + " (" + String(version) + "%)";
-
-    if (ArduinoCloud.connected()) {
-      iotConnected = true;
-    } else {
-      iotConnected = false;
+    if (iotConnected) {
+      ArduinoCloud.update();  // takes ~20ms
     }
-    ArduinoCloud.update();
   }
 }
 
@@ -614,7 +641,7 @@ void debugMode() {
       centerString(iotString, MID, MID - ROW);
       char buffer[30];
       if (adcOnline) readADC();
-      sprintf(buffer, "t: %i:%i:%i (%is)", hour(localTime), minute(localTime), second(localTime), millis() / 1000);
+      // sprintf(buffer, "t: %i:%i:%i (%is)", hour(localTime), minute(localTime), second(localTime), millis() / 1000);
       centerString(buffer, MID, MID);
       centerString("ADC: " + String(adcVal) + " (" + String(adcGrams) + "g)", MID, MID + ROW);
     }
@@ -718,12 +745,14 @@ void motorDown() {
   }
 }
 void motorOn() {
+  Serial.println("Motor on");
   motorActive = true;
   tic.setCurrentLimit(currentLimitWhileMoving);
   tic.energize();
   tic.exitSafeStart();
 }
 void motorOff() {
+  Serial.println("Motor off");
   tic.haltAndSetPosition(0);
   tic.deenergize();
   tic.setCurrentLimit(currentLimitWhileStopped);
@@ -752,6 +781,7 @@ void logData(int dataType) {
   }
   dataCount++;
   if (dataCount == SD_BUFFER_SIZE) {
+    Serial.println("Writing data to SD...");
     motorStop();  // pause the motor
     carrier.leds.clear();
     carrier.leds.show();
