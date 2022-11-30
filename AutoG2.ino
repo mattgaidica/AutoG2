@@ -30,7 +30,8 @@ TicI2C tic;
 LinearRegression lr = LinearRegression();
 File sdFile;
 
-float version = 1.1;
+float version = 1.2;
+const bool USE_IOT = false;
 
 // Menus
 bool touch[5] = { 0 };
@@ -65,7 +66,7 @@ double linReg[2];
 bool motorActive = false;
 const uint32_t MOTOR_MAX_ACCEL = 1000000;
 const uint32_t MOTOR_STEPS_PER_S = 800000000;
-const uint16_t currentLimitWhileMoving = 1000;
+const uint16_t currentLimitWhileMoving = 500;
 const uint16_t currentLimitWhileStopped = 0;
 const int FORCE_STOP_POS = 10000;
 int32_t motorPos = 0;
@@ -97,12 +98,12 @@ const int LOG_DATA_TIMEOUT = 1000;  // ms
 long int logDataTime = 0;
 const int DATA_INIT = 0;
 const int DATA_LOOP = 1;
-const int SD_BUFFER_SIZE = 512;
+const int SD_BUFFER_SIZE = 60;
 uint8_t dataCol0[SD_BUFFER_SIZE] = { 0 };  // dataType
 int16_t dataCol1[SD_BUFFER_SIZE] = { 0 };  // time
 int16_t dataCol2[SD_BUFFER_SIZE] = { 0 };  // data 1
 int16_t dataCol3[SD_BUFFER_SIZE] = { 0 };  // data 2
-uint32_t dataCols[5][SD_BUFFER_SIZE] = { 0 };
+uint32_t dataCols[6][SD_BUFFER_SIZE] = { 0 };
 int dataCount = 0;
 // IoT
 WiFiConnectionHandler ArduinoIoTPreferredConnection(SECRET_SSID, SECRET_PASS);
@@ -155,29 +156,30 @@ void setup() {
   motorOff();
   tic.setMaxAccel(MOTOR_MAX_ACCEL);
   tic.setMaxDecel(MOTOR_MAX_ACCEL);
-  tic.setStepMode(TicStepMode::Microstep32);
+  tic.setStepMode(TicStepMode::Microstep32);  // max: Microstep32, note this affects motor speed/force stop safety
   tic.haltAndSetPosition(0);
 
   // IoT
-  // !! this is blocking, need to timeout after n-tries
-  initIotProperties();
-  ArduinoCloud.begin(ArduinoIoTPreferredConnection, false);  // turn off watchdog for long updates
-  ArduinoCloud.addCallback(ArduinoIoTCloudEvent::CONNECT, doThisOnConnect);
-  ArduinoCloud.addCallback(ArduinoIoTCloudEvent::SYNC, doThisOnSync);
-  ArduinoCloud.addCallback(ArduinoIoTCloudEvent::DISCONNECT, doThisOnDisconnect);
-  setDebugMessageLevel(DBG_INFO);
-  ArduinoCloud.printDebugInfo();
+  if (USE_IOT) {
+    initIotProperties();
+    ArduinoCloud.begin(ArduinoIoTPreferredConnection, false);  // turn off watchdog for long updates
+    ArduinoCloud.addCallback(ArduinoIoTCloudEvent::CONNECT, doThisOnConnect);
+    ArduinoCloud.addCallback(ArduinoIoTCloudEvent::SYNC, doThisOnSync);
+    ArduinoCloud.addCallback(ArduinoIoTCloudEvent::DISCONNECT, doThisOnDisconnect);
+    setDebugMessageLevel(DBG_INFO);
+    ArduinoCloud.printDebugInfo();
 
-  iotTime = millis();
-  while (!iotConnected) {
-    ArduinoCloud.update();
-    if (millis() - iotTime > IOT_INIT_TIMEOUT) {
-      Serial.println("IOT init timeout!");
-      break;
+    iotTime = millis();
+    while (!iotConnected) {
+      ArduinoCloud.update();
+      if (millis() - iotTime > IOT_INIT_TIMEOUT) {
+        Serial.println("IOT init timeout!");
+        break;
+      }
     }
+    iotTime = 0;
   }
-  iotTime = 0;
-  
+
   homeMenu();
 }
 
@@ -231,7 +233,7 @@ void initIotProperties() {
     ArduinoCloud.addProperty(experiment, READ, ON_CHANGE, NULL);
     ArduinoCloud.addProperty(localTime, READ, ON_CHANGE, NULL);
     ArduinoCloud.addProperty(version, READ, ON_CHANGE, NULL);
-    ArduinoCloud.addProperty(closedLoopPercent, READWRITE, ON_CHANGE, NULL);
+    ArduinoCloud.addProperty(closedLoopPercent, READ, ON_CHANGE, NULL);
   }
 }
 
@@ -295,19 +297,17 @@ void buttonsUpdate() {
   if (closeMotorLoop()) {
     if (millis() - logDataTime > LOG_DATA_TIMEOUT) {
       logDataTime = millis();
-      Serial.println("Logging data");
-      // logData(DATA_LOOP);
+      logData(DATA_LOOP);
     }
   }
 
-  if (millis() - iotTime > IOT_REFRESH) {
-    Serial.println("Syncing cloud...");
+  if (millis() - iotTime > IOT_REFRESH && iotConnected) {
+    Serial.print("Syncing cloud at: ");
+    Serial.println(localTime);
     iotTime = millis();
-    localTime = ArduinoCloud.getLocalTime();
     experiment = "Animal " + String(animalNumber) + ", " + String(animalWeight) + "g" + " (" + String(version) + "%)";
-    if (iotConnected) {
-      ArduinoCloud.update();  // takes ~20ms
-    }
+    localTime = ArduinoCloud.getLocalTime();
+    ArduinoCloud.update();  // takes ~20ms
   }
 }
 
@@ -392,7 +392,12 @@ void screenSaver() {
 void homeMenu() {
   debounceMenu();
   // centerString(WELCOME_MSG, MID, MID - ROW * 2);  // use +/-ROW
-  centerString("Animal " + String(animalNumber) + ", " + String(animalWeight) + "g", MID, MID - ROW);
+  if (sdCard) {
+    centerString("Animal " + String(animalNumber) + ", " + String(animalWeight) + "g", MID, MID - ROW);
+  } else {
+    centerString("NO SD CARD!", MID, MID - ROW);
+  }
+
 
   if (adcOnline & motorActive & doClosedLoop & sdCard) {
     carrier.display.setTextSize(3);
@@ -524,7 +529,11 @@ void setUnload() {
       if (doClosedLoop) {
         makeButtonMenu("(-)", "(+)", MENU_NONE, "Turn Off", "Home");
       } else {
-        makeButtonMenu("(-)", "(+)", MENU_NONE, "Turn On", "Home");
+        if (motorActive) {
+          makeButtonMenu("(-)", "(+)", MENU_NONE, "Turn On", "Home");
+        } else {
+          makeButtonMenu("(-)", "(+)", MENU_NONE, "(need motor)", "Home");
+        }
       }
       showUnloadSettings();
     }
@@ -766,7 +775,9 @@ void motorOff() {
 // !! target unload
 // dataType, time, data1, data2
 void logData(int dataType) {
-  dataCols[0][dataCount] = dataCount;
+  Serial.print("Log Count: ");
+  Serial.println(dataCount);
+  dataCols[0][dataCount] = dataType;
   dataCols[1][dataCount] = millis() / 1000;
   dataCols[2][dataCount] = localTime;
   if (dataType == 0) {  // init
