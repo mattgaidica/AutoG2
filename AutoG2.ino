@@ -24,14 +24,14 @@ C |  x
 #include <ArduinoIoTCloud.h>
 #include <Arduino_ConnectionHandler.h>
 
+float version = 1.2;
+const bool USE_IOT = false;
+
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
 TicI2C tic;
 LinearRegression lr = LinearRegression();
 File sdFile;
-
-float version = 1.2;
-const bool USE_IOT = false;
 
 // Menus
 bool touch[5] = { 0 };
