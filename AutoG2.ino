@@ -84,7 +84,7 @@ bool adcOnline = false;
 bool doClosedLoop = false;
 int closedLoopPercent = 100;
 const int CLOSED_LOOP_INC = 10;  // percent
-const int ADC_ERROR = 60;        // based on ADC resolution/gain
+const int ADC_ERROR = 30;        // based on ADC resolution/gain
 bool cleanupClosedLoop = false;
 int adcGrams = 0;
 // SD card
@@ -156,7 +156,7 @@ void setup() {
   motorOff();
   tic.setMaxAccel(MOTOR_MAX_ACCEL);
   tic.setMaxDecel(MOTOR_MAX_ACCEL);
-  tic.setStepMode(TicStepMode::Microstep32);  // max: Microstep32, note this affects motor speed/force stop safety
+  tic.setStepMode(TicStepMode::Microstep16);  // max: Microstep32, note this affects motor speed/force stop safety
   tic.haltAndSetPosition(0);
 
   // IoT
