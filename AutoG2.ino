@@ -159,6 +159,29 @@ void setup() {
   tic.setStepMode(TicStepMode::Microstep16);  // max: Microstep32, note this affects motor speed/force stop safety
   tic.haltAndSetPosition(0);
 
+
+  // MVP for getting cloud time  
+  // byte mac[5];
+  // WiFi.macAddress(mac);
+  // bool doProperties = true;
+  // if (memcmp(mac, MAC_G0, 5) == 0) {
+  //   ArduinoCloud.setThingId(THING_ID_G0);
+  // } else if (memcmp(mac, MAC_G1, 5) == 0) {
+  //   ArduinoCloud.setThingId(THING_ID_G1);
+  // } else {
+  //   doProperties = false;
+  // }
+  // ArduinoCloud.begin(ArduinoIoTPreferredConnection, false);  // turn off watchdog for long updates
+  // setDebugMessageLevel(DBG_INFO);
+  // ArduinoCloud.printDebugInfo();
+  // while (1) {
+  //   localTime = ArduinoCloud.getLocalTime();
+  //   Serial.println(localTime);
+  //   ArduinoCloud.update();  // takes ~20ms
+  //   delay(2000);
+  // }
+
+
   // IoT
   if (USE_IOT) {
     initIotProperties();
@@ -292,6 +315,7 @@ void buttonsUpdate() {
     motorPos = tic.getCurrentPosition();
     if (abs(motorPos) > FORCE_STOP_POS) {
       motorOff();
+      homeMenu();  // force reset of UI
     }
   }
   if (closeMotorLoop()) {
