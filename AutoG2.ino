@@ -25,7 +25,7 @@ C |  x
 #include <Arduino_ConnectionHandler.h>
 
 float version = 1.2;
-const bool USE_IOT = false;
+const bool USE_IOT = true;
 
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
@@ -103,15 +103,16 @@ uint8_t dataCol0[SD_BUFFER_SIZE] = { 0 };  // dataType
 int16_t dataCol1[SD_BUFFER_SIZE] = { 0 };  // time
 int16_t dataCol2[SD_BUFFER_SIZE] = { 0 };  // data 1
 int16_t dataCol3[SD_BUFFER_SIZE] = { 0 };  // data 2
-uint32_t dataCols[6][SD_BUFFER_SIZE] = { 0 };
+uint32_t dataCols[7][SD_BUFFER_SIZE] = { 0 };
 int dataCount = 0;
 // IoT
 WiFiConnectionHandler ArduinoIoTPreferredConnection(SECRET_SSID, SECRET_PASS);
-const int IOT_INIT_TIMEOUT = 20000;
-const int IOT_REFRESH = 5000;  // ms
+const long int IOT_INIT_TIMEOUT = 60 * 5;  // s
+const int IOT_REFRESH = 5000;         // ms
 long int iotTime = 0;
 bool killSwitch = false;
-CloudTime localTime;
+CloudTime localTime = 0;
+long int localTimeStartedAt;
 String experiment = "";
 bool iotConnected = false;
 
@@ -159,29 +160,6 @@ void setup() {
   tic.setStepMode(TicStepMode::Microstep16);  // max: Microstep32, note this affects motor speed/force stop safety
   tic.haltAndSetPosition(0);
 
-
-  // MVP for getting cloud time  
-  // byte mac[5];
-  // WiFi.macAddress(mac);
-  // bool doProperties = true;
-  // if (memcmp(mac, MAC_G0, 5) == 0) {
-  //   ArduinoCloud.setThingId(THING_ID_G0);
-  // } else if (memcmp(mac, MAC_G1, 5) == 0) {
-  //   ArduinoCloud.setThingId(THING_ID_G1);
-  // } else {
-  //   doProperties = false;
-  // }
-  // ArduinoCloud.begin(ArduinoIoTPreferredConnection, false);  // turn off watchdog for long updates
-  // setDebugMessageLevel(DBG_INFO);
-  // ArduinoCloud.printDebugInfo();
-  // while (1) {
-  //   localTime = ArduinoCloud.getLocalTime();
-  //   Serial.println(localTime);
-  //   ArduinoCloud.update();  // takes ~20ms
-  //   delay(2000);
-  // }
-
-
   // IoT
   if (USE_IOT) {
     initIotProperties();
@@ -192,11 +170,21 @@ void setup() {
     setDebugMessageLevel(DBG_INFO);
     ArduinoCloud.printDebugInfo();
 
+    clearScreen();  // default is white text
+    centerString("Cloud Sync...", MID, MID - ROW);
+    makeButtonMenu(MENU_NONE, MENU_NONE, MENU_NONE, MENU_NONE, "Skip");
     iotTime = millis();
-    while (!iotConnected) {
+    while (!iotConnected || localTime < IOT_INIT_TIMEOUT) {
       ArduinoCloud.update();
-      if (millis() - iotTime > IOT_INIT_TIMEOUT) {
-        Serial.println("IOT init timeout!");
+      if (iotConnected) {
+        localTime = ArduinoCloud.getLocalTime();
+        localTimeStartedAt = millis() / 1000;
+        Serial.println("localTime: " + String(localTime) + " at " + String(localTimeStartedAt));
+        delay(1000);
+      }
+      buttonsUpdate();
+      if (touch[MENU_HOME]) {  // millis() - iotTime > IOT_INIT_TIMEOUT || --  || localTime > IOT_INIT_TIMEOUT
+        debounceMenu();
         break;
       }
     }
@@ -307,6 +295,8 @@ void buttonsUpdate() {
   if (LEDdir) iLED++;
   if (!LEDdir) iLED--;
 
+  localTime = millis() / 1000 + localTimeStartedAt;
+
   if (motorActive) {
     if (millis() - motorResetTime > RESET_COMMAND_TIMEOUT) {
       tic.resetCommandTimeout();
@@ -315,6 +305,7 @@ void buttonsUpdate() {
     motorPos = tic.getCurrentPosition();
     if (abs(motorPos) > FORCE_STOP_POS) {
       motorOff();
+      debounceMenu();
       homeMenu();  // force reset of UI
     }
   }
@@ -325,14 +316,14 @@ void buttonsUpdate() {
     }
   }
 
-  if (millis() - iotTime > IOT_REFRESH && iotConnected) {
-    Serial.print("Syncing cloud at: ");
-    Serial.println(localTime);
-    iotTime = millis();
-    experiment = "Animal " + String(animalNumber) + ", " + String(animalWeight) + "g" + " (" + String(version) + "%)";
-    localTime = ArduinoCloud.getLocalTime();
-    ArduinoCloud.update();  // takes ~20ms
-  }
+  // if (millis() - iotTime > IOT_REFRESH && iotConnected) {
+  //   Serial.print("Syncing cloud at: ");
+  //   Serial.println(localTime);
+  //   iotTime = millis();
+  //   experiment = "Animal " + String(animalNumber) + ", " + String(animalWeight) + "g" + " (" + String(version) + "%)";
+  //   localTime = ArduinoCloud.getLocalTime();
+  //   ArduinoCloud.update();  // takes ~20ms
+  // }
 }
 
 void readADC() {
@@ -674,7 +665,7 @@ void debugMode() {
       centerString(iotString, MID, MID - ROW);
       char buffer[30];
       if (adcOnline) readADC();
-      // sprintf(buffer, "t: %i:%i:%i (%is)", hour(localTime), minute(localTime), second(localTime), millis() / 1000);
+      sprintf(buffer, "t: %i:%i:%i (%is)", hour(localTime), minute(localTime), second(localTime), millis() / 1000);
       centerString(buffer, MID, MID);
       centerString("ADC: " + String(adcVal) + " (" + String(adcGrams) + "g)", MID, MID + ROW);
     }
@@ -799,6 +790,9 @@ void motorOff() {
 // !! target unload
 // dataType, time, data1, data2
 void logData(int dataType) {
+  int lum, none;
+  carrier.Light.readColor(none, none, none, lum);
+
   Serial.print("Log Count: ");
   Serial.println(dataCount);
   dataCols[0][dataCount] = dataType;
@@ -808,11 +802,13 @@ void logData(int dataType) {
     dataCols[3][dataCount] = animalNumber;
     dataCols[4][dataCount] = animalWeight;
     dataCols[5][dataCount] = 0;  // null
+    dataCols[6][dataCount] = 0;
   }
   if (dataType == 1) {  // closed loop
     dataCols[3][dataCount] = adcVal;
     dataCols[4][dataCount] = adcGrams;
     dataCols[5][dataCount] = closedLoopPercent;
+    dataCols[6][dataCount] = lum;
   }
   dataCount++;
   if (dataCount == SD_BUFFER_SIZE) {
@@ -825,7 +821,7 @@ void logData(int dataType) {
       dataCount = 0;
       for (int i = 0; i < SD_BUFFER_SIZE; i++) {
         String serialString = "";
-        for (int j = 0; j < 5; j++) {
+        for (int j = 0; j < sizeof(dataCols) / sizeof(dataCols[0]); j++) {
           serialString += String(dataCols[j][i]);
           if (j < 4) {
             serialString += ",";
