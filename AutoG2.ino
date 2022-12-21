@@ -17,15 +17,15 @@ C |  x
 #include <LinearRegression.h>
 #include <TimeLib.h>
 
-// #include </Users/matt/Documents/Arduino/AutoG2/iot_secrets_um.h>
-#include </Users/matt/Documents/Arduino/AutoG2/iot_secrets.h>
+#include </Users/matt/Documents/Arduino/AutoG2/iot_secrets_um.h>
+// #include </Users/matt/Documents/Arduino/AutoG2/iot_secrets.h>
 #include </Users/matt/Documents/Arduino/AutoG2/iot_things.h>
 
 #include <ArduinoIoTCloud.h>
 #include <Arduino_ConnectionHandler.h>
 
-float version = 1.2;
-const bool USE_IOT = true;
+float version = 1.3;
+const bool USE_IOT = false;
 
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
@@ -173,13 +173,15 @@ void setup() {
     clearScreen();  // default is white text
     centerString("Cloud Sync...", MID, MID - ROW);
     makeButtonMenu(MENU_NONE, MENU_NONE, MENU_NONE, MENU_NONE, "Skip");
-    iotTime = millis();
-    while (!iotConnected || localTime < IOT_INIT_TIMEOUT) {
+    while (1) {
       ArduinoCloud.update();
       if (iotConnected) {
         localTime = ArduinoCloud.getLocalTime();
         localTimeStartedAt = millis() / 1000;
         Serial.println("localTime: " + String(localTime) + " at " + String(localTimeStartedAt));
+        if (localTime > IOT_INIT_TIMEOUT) {
+          break;
+        }
         delay(1000);
       }
       buttonsUpdate();
@@ -188,7 +190,6 @@ void setup() {
         break;
       }
     }
-    iotTime = 0;
   }
 
   homeMenu();
