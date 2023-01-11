@@ -24,7 +24,7 @@ C |  x
 #include <ArduinoIoTCloud.h>
 #include <Arduino_ConnectionHandler.h>
 
-float version = 1.3;
+float version = 1.4;
 const bool USE_IOT = false;
 
 MKRIoTCarrier carrier;
@@ -99,16 +99,12 @@ long int logDataTime = 0;
 const int DATA_INIT = 0;
 const int DATA_LOOP = 1;
 const int SD_BUFFER_SIZE = 60;
-uint8_t dataCol0[SD_BUFFER_SIZE] = { 0 };  // dataType
-int16_t dataCol1[SD_BUFFER_SIZE] = { 0 };  // time
-int16_t dataCol2[SD_BUFFER_SIZE] = { 0 };  // data 1
-int16_t dataCol3[SD_BUFFER_SIZE] = { 0 };  // data 2
 uint32_t dataCols[7][SD_BUFFER_SIZE] = { 0 };
 int dataCount = 0;
 // IoT
 WiFiConnectionHandler ArduinoIoTPreferredConnection(SECRET_SSID, SECRET_PASS);
 const long int IOT_INIT_TIMEOUT = 60 * 5;  // s
-const int IOT_REFRESH = 5000;         // ms
+const int IOT_REFRESH = 5000;              // ms
 long int iotTime = 0;
 bool killSwitch = false;
 CloudTime localTime = 0;
@@ -802,7 +798,7 @@ void logData(int dataType) {
   if (dataType == 0) {  // init
     dataCols[3][dataCount] = animalNumber;
     dataCols[4][dataCount] = animalWeight;
-    dataCols[5][dataCount] = 0;  // null
+    dataCols[5][dataCount] = version * 1000;  // null
     dataCols[6][dataCount] = 0;
   }
   if (dataType == 1) {  // closed loop
@@ -824,7 +820,7 @@ void logData(int dataType) {
         String serialString = "";
         for (int j = 0; j < sizeof(dataCols) / sizeof(dataCols[0]); j++) {
           serialString += String(dataCols[j][i]);
-          if (j < 4) {
+          if (j <= sizeof(dataCols[0])) {
             serialString += ",";
           }
         }
