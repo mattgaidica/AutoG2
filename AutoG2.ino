@@ -16,16 +16,9 @@ C |  x
 #include <Tic.h>
 #include <LinearRegression.h>
 #include <TimeLib.h>
+#include <ArduinoBLE.h>
 
-#include </Users/matt/Documents/Arduino/AutoG2/iot_secrets_um.h>
-// #include </Users/matt/Documents/Arduino/AutoG2/iot_secrets.h>
-#include </Users/matt/Documents/Arduino/AutoG2/iot_things.h>
-
-#include <ArduinoIoTCloud.h>
-#include <Arduino_ConnectionHandler.h>
-
-float version = 1.4;
-const bool USE_IOT = false;
+float version = 1.5;
 
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
@@ -101,16 +94,10 @@ const int DATA_LOOP = 1;
 const int SD_BUFFER_SIZE = 60;
 uint32_t dataCols[7][SD_BUFFER_SIZE] = { 0 };
 int dataCount = 0;
-// IoT
-WiFiConnectionHandler ArduinoIoTPreferredConnection(SECRET_SSID, SECRET_PASS);
-const long int IOT_INIT_TIMEOUT = 60 * 5;  // s
-const int IOT_REFRESH = 5000;              // ms
-long int iotTime = 0;
+
 bool killSwitch = false;
-CloudTime localTime = 0;
-long int localTimeStartedAt;
-String experiment = "";
-bool iotConnected = false;
+uint32_t localTime = 0;
+long int localTimeStartedAt = 0;
 
 void setup() {
   /* Initialize serial and wait up to 5 seconds for port to open */
@@ -156,30 +143,15 @@ void setup() {
   tic.setStepMode(TicStepMode::Microstep16);  // max: Microstep32, note this affects motor speed/force stop safety
   tic.haltAndSetPosition(0);
 
-  // IoT
-  if (USE_IOT) {
-    initIotProperties();
-    ArduinoCloud.begin(ArduinoIoTPreferredConnection, false);  // turn off watchdog for long updates
-    ArduinoCloud.addCallback(ArduinoIoTCloudEvent::CONNECT, doThisOnConnect);
-    ArduinoCloud.addCallback(ArduinoIoTCloudEvent::SYNC, doThisOnSync);
-    ArduinoCloud.addCallback(ArduinoIoTCloudEvent::DISCONNECT, doThisOnDisconnect);
-    setDebugMessageLevel(DBG_INFO);
-    ArduinoCloud.printDebugInfo();
-
+  // BLE clock
+  if (BLE.begin()) {
     clearScreen();  // default is white text
-    centerString("Cloud Sync...", MID, MID - ROW);
+    centerString("Waiting for BLE clock...", MID, MID - ROW);
     makeButtonMenu(MENU_NONE, MENU_NONE, MENU_NONE, MENU_NONE, "Skip");
-    while (1) {
-      ArduinoCloud.update();
-      if (iotConnected) {
-        localTime = ArduinoCloud.getLocalTime();
-        localTimeStartedAt = millis() / 1000;
-        Serial.println("localTime: " + String(localTime) + " at " + String(localTimeStartedAt));
-        if (localTime > IOT_INIT_TIMEOUT) {
-          break;
-        }
-        delay(1000);
-      }
+    BLE.setEventHandler(BLEDiscovered, bleCentralDiscoverHandler);
+    BLE.scanForUuid("effe", true);
+    while (localTime == 0) {
+      // exits via BLE callback or menu button      
       buttonsUpdate();
       if (touch[MENU_HOME]) {  // millis() - iotTime > IOT_INIT_TIMEOUT || --  || localTime > IOT_INIT_TIMEOUT
         debounceMenu();
@@ -189,18 +161,6 @@ void setup() {
   }
 
   homeMenu();
-}
-
-void doThisOnConnect() {
-  Serial.println("Board successfully connected to Arduino IoT Cloud");
-  iotConnected = true;
-}
-void doThisOnSync() {
-  Serial.println("Thing Properties synchronised");
-}
-void doThisOnDisconnect() {
-  Serial.println("Board disconnected from Arduino IoT Cloud");
-  iotConnected = false;
 }
 
 void loop() {
@@ -217,31 +177,21 @@ void loop() {
   if (touch[MENU_HOME]) refreshTime = millis();
 }
 
+void bleCentralDiscoverHandler(BLEDevice peripheral) {
+  if (peripheral.hasLocalName()) {
+    String localName = peripheral.localName();
+    int strLen = localName.length() + 1;
+    char charArr[strLen];
+    localName.toCharArray(charArr, strLen);
+    localTime = strtol(charArr, NULL, 16);
+    localTimeStartedAt = millis();
 
-void initIotProperties() {
-  byte mac[5];
-  WiFi.macAddress(mac);
+    Serial.print("Local Name: ");
+    Serial.println(localName);
+    Serial.print("Current time: ");
+    Serial.println(localTime, HEX);
 
-  bool doProperties = true;
-  if (memcmp(mac, MAC_G0, 5) == 0) {
-    ArduinoCloud.setThingId(THING_ID_G0);
-  } else if (memcmp(mac, MAC_G1, 5) == 0) {
-    ArduinoCloud.setThingId(THING_ID_G1);
-  } else {
-    doProperties = false;
-  }
-
-  if (doProperties) {
-    ArduinoCloud.addProperty(adcGrams, READ, 1 * SECONDS, NULL);
-    ArduinoCloud.addProperty(motorActive, READ, ON_CHANGE, NULL);
-    ArduinoCloud.addProperty(killSwitch, READWRITE, ON_CHANGE, onKillSwitchChange);
-    ArduinoCloud.addProperty(sdCard, READ, ON_CHANGE, NULL);
-    ArduinoCloud.addProperty(doClosedLoop, READ, ON_CHANGE, NULL);
-    ArduinoCloud.addProperty(version, READ, ON_CHANGE, NULL);
-    ArduinoCloud.addProperty(experiment, READ, ON_CHANGE, NULL);
-    ArduinoCloud.addProperty(localTime, READ, ON_CHANGE, NULL);
-    ArduinoCloud.addProperty(version, READ, ON_CHANGE, NULL);
-    ArduinoCloud.addProperty(closedLoopPercent, READ, ON_CHANGE, NULL);
+    Serial.println("BLE done.");
   }
 }
 
@@ -292,7 +242,7 @@ void buttonsUpdate() {
   if (LEDdir) iLED++;
   if (!LEDdir) iLED--;
 
-  localTime = millis() / 1000 + localTimeStartedAt;
+  localTime = (millis() - localTimeStartedAt) / 1000 + localTime;  // rm when BLE connected
 
   if (motorActive) {
     if (millis() - motorResetTime > RESET_COMMAND_TIMEOUT) {
@@ -312,15 +262,6 @@ void buttonsUpdate() {
       logData(DATA_LOOP);
     }
   }
-
-  // if (millis() - iotTime > IOT_REFRESH && iotConnected) {
-  //   Serial.print("Syncing cloud at: ");
-  //   Serial.println(localTime);
-  //   iotTime = millis();
-  //   experiment = "Animal " + String(animalNumber) + ", " + String(animalWeight) + "g" + " (" + String(version) + "%)";
-  //   localTime = ArduinoCloud.getLocalTime();
-  //   ArduinoCloud.update();  // takes ~20ms
-  // }
 }
 
 void readADC() {
@@ -653,13 +594,6 @@ void debugMode() {
     if (doRefresh(2000) | doOnce) {
       doOnce = false;
       clearDataArea();
-      String iotString;
-      if (iotConnected) {
-        iotString = "IoT Connected";
-      } else {
-        iotString = "IoT Disconnected";
-      }
-      centerString(iotString, MID, MID - ROW);
       char buffer[30];
       if (adcOnline) readADC();
       sprintf(buffer, "t: %i:%i:%i (%is)", hour(localTime), minute(localTime), second(localTime), millis() / 1000);
@@ -826,7 +760,6 @@ void logData(int dataType) {
         }
         sdFile.println(serialString);
       }
-
       sdFile.close();
     }
   }
