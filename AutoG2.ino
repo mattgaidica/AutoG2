@@ -97,7 +97,8 @@ int dataCount = 0;
 
 bool killSwitch = false;
 uint32_t localTime = 0;
-long int localTimeStartedAt = 0;
+long int initTime_millis = 0;
+uint32_t initTime = 0;
 
 void setup() {
   /* Initialize serial and wait up to 5 seconds for port to open */
@@ -146,12 +147,13 @@ void setup() {
   // BLE clock
   if (BLE.begin()) {
     clearScreen();  // default is white text
-    centerString("Waiting for BLE clock...", MID, MID - ROW);
+    centerString("BLE Clock?", MID, MID);
     makeButtonMenu(MENU_NONE, MENU_NONE, MENU_NONE, MENU_NONE, "Skip");
     BLE.setEventHandler(BLEDiscovered, bleCentralDiscoverHandler);
     BLE.scanForUuid("effe", true);
-    while (localTime == 0) {
-      // exits via BLE callback or menu button      
+    while (initTime == 0) {
+      // exits via BLE callback or menu button
+      BLE.poll();
       buttonsUpdate();
       if (touch[MENU_HOME]) {  // millis() - iotTime > IOT_INIT_TIMEOUT || --  || localTime > IOT_INIT_TIMEOUT
         debounceMenu();
@@ -183,14 +185,10 @@ void bleCentralDiscoverHandler(BLEDevice peripheral) {
     int strLen = localName.length() + 1;
     char charArr[strLen];
     localName.toCharArray(charArr, strLen);
-    localTime = strtol(charArr, NULL, 16);
-    localTimeStartedAt = millis();
-
-    Serial.print("Local Name: ");
-    Serial.println(localName);
+    initTime = strtol(charArr, NULL, 16);
+    initTime_millis = millis();
     Serial.print("Current time: ");
-    Serial.println(localTime, HEX);
-
+    Serial.println(initTime, HEX);
     Serial.println("BLE done.");
   }
 }
@@ -242,7 +240,7 @@ void buttonsUpdate() {
   if (LEDdir) iLED++;
   if (!LEDdir) iLED--;
 
-  localTime = (millis() - localTimeStartedAt) / 1000 + localTime;  // rm when BLE connected
+  localTime = ((millis() - initTime_millis) / 1000) + initTime;
 
   if (motorActive) {
     if (millis() - motorResetTime > RESET_COMMAND_TIMEOUT) {
@@ -722,6 +720,9 @@ void motorOff() {
 // dataType, time, data1, data2
 void logData(int dataType) {
   int lum, none;
+  while (!carrier.Light.colorAvailable()) {
+    delay(5);
+  }
   carrier.Light.readColor(none, none, none, lum);
 
   Serial.print("Log Count: ");
@@ -732,12 +733,12 @@ void logData(int dataType) {
   if (dataType == 0) {  // init
     dataCols[3][dataCount] = animalNumber;
     dataCols[4][dataCount] = animalWeight;
-    dataCols[5][dataCount] = version * 1000;  // null
+    dataCols[5][dataCount] = version * 10;  // null
     dataCols[6][dataCount] = 0;
   }
-  if (dataType == 1) {  // closed loop
-    dataCols[3][dataCount] = adcVal;
-    dataCols[4][dataCount] = adcGrams;
+  if (dataType == 1) {                       // closed loop
+    dataCols[3][dataCount] = abs(adcVal);    // !!this comes in as int, dataCols is uint tho
+    dataCols[4][dataCount] = abs(adcGrams);  // make abs() for now
     dataCols[5][dataCount] = closedLoopPercent;
     dataCols[6][dataCount] = lum;
   }
@@ -754,7 +755,7 @@ void logData(int dataType) {
         String serialString = "";
         for (int j = 0; j < sizeof(dataCols) / sizeof(dataCols[0]); j++) {
           serialString += String(dataCols[j][i]);
-          if (j <= sizeof(dataCols[0])) {
+          if (j < sizeof(dataCols) / sizeof(dataCols[0]) - 1) {
             serialString += ",";
           }
         }
