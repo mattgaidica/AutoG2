@@ -18,7 +18,7 @@ C |  x
 #include <TimeLib.h>
 #include <ArduinoBLE.h>
 
-float version = 1.5;
+float version = 1.6;
 
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
@@ -70,7 +70,7 @@ const uint32_t MOTOR_STATE_STOP = 0;
 
 long int lastMotorStateChangeMillis = 0;
 uint32_t lastMotorState = 0;
-const int FORCE_MOTOR_STOP_MS = 3000;
+const int FORCE_MOTOR_STOP_MS = 2000;
 
 
 // ADC + Closed-loop
@@ -258,8 +258,6 @@ void buttonsUpdate() {
     }
     if (millis() - lastMotorStateChangeMillis > FORCE_MOTOR_STOP_MS) {
       motorOff();
-      debounceMenu();
-      homeMenu();  // force reset of UI
     }
   }
   if (curMotorState == 0) {
@@ -591,7 +589,8 @@ void manualControl() {
 }
 void showMotorPosition() {
   clearDataArea();
-  centerString("Motor millis: " + String(millis() - lastMotorStateChangeMillis), MID, MID);
+  centerString("Motor ms: " + String(millis() - lastMotorStateChangeMillis), MID, MID);
+  Serial.print("motor ms:");
 }
 
 void debugMode() {
