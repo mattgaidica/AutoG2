@@ -61,14 +61,18 @@ const uint32_t MOTOR_MAX_ACCEL = 1000000;
 const uint32_t MOTOR_STEPS_PER_S = 800000000;
 const uint16_t currentLimitWhileMoving = 500;
 const uint16_t currentLimitWhileStopped = 0;
-const int FORCE_STOP_POS = 10000;
-int32_t motorPos = 0;
 const int RESET_COMMAND_TIMEOUT = 500;  // ms
 long int motorResetTime = 0;
 int curMotorState = 0;
 const uint32_t MOTOR_STATE_UP = -1;
 const uint32_t MOTOR_STATE_DOWN = 1;
 const uint32_t MOTOR_STATE_STOP = 0;
+
+long int lastMotorStateChangeMillis = 0;
+uint32_t lastMotorState = 0;
+const int FORCE_MOTOR_STOP_MS = 3000;
+
+
 // ADC + Closed-loop
 const int neg_pin = A5;
 const int pos_pin = A6;
@@ -247,12 +251,21 @@ void buttonsUpdate() {
       tic.resetCommandTimeout();
       motorResetTime = millis();
     }
-    motorPos = tic.getCurrentPosition();
-    if (abs(motorPos) > FORCE_STOP_POS) {
+    // check for loose cable
+    if (lastMotorState != curMotorState && curMotorState != 0) {
+      lastMotorStateChangeMillis = millis();
+      lastMotorState = curMotorState;
+    }
+    if (millis() - lastMotorStateChangeMillis > FORCE_MOTOR_STOP_MS) {
       motorOff();
       debounceMenu();
       homeMenu();  // force reset of UI
     }
+  }
+  if (curMotorState == 0) {
+    // keep these flushed
+    lastMotorStateChangeMillis = millis();
+    lastMotorState = 0;
   }
   if (closeMotorLoop()) {
     if (millis() - logDataTime > LOG_DATA_TIMEOUT) {
@@ -578,7 +591,7 @@ void manualControl() {
 }
 void showMotorPosition() {
   clearDataArea();
-  centerString("Steps: " + String(motorPos), MID, MID);
+  centerString("Motor millis: " + String(millis() - lastMotorStateChangeMillis), MID, MID);
 }
 
 void debugMode() {
