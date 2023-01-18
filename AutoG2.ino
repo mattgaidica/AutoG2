@@ -18,7 +18,7 @@ C |  x
 #include <TimeLib.h>
 #include <ArduinoBLE.h>
 
-float version = 1.6;
+float version = 1.7;
 
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
@@ -776,4 +776,6 @@ void logData(int dataType) {
       sdFile.close();
     }
   }
+  // in case motor was running
+  lastMotorStateChangeMillis = millis();
 }
