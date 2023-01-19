@@ -11,6 +11,10 @@ C |  x
   0    100   200
   crane weight (gr)
 */
+
+// !! Pololu Motor Settings (through GUI): timeout = 10s
+// !! disable relay GPIO? Why do they click randomly?
+
 #include <Arduino_MKRIoTCarrier.h>
 #include <ADS1X15.h>
 #include <Tic.h>
@@ -18,7 +22,7 @@ C |  x
 #include <TimeLib.h>
 #include <ArduinoBLE.h>
 
-float version = 1.7;
+float version = 1.8;
 
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
@@ -44,7 +48,7 @@ const int MID = 120;
 const int ROW = 20;
 // Touch settings
 const int TOUCH_THRESH = 1000;
-const int TOUCH_TIMEOUT_MS = 50;
+const int TOUCH_TIMEOUT_MS = 100;
 // Variables
 long int refreshTime = 0;
 int iLED = 0;
@@ -191,9 +195,6 @@ void bleCentralDiscoverHandler(BLEDevice peripheral) {
     localName.toCharArray(charArr, strLen);
     initTime = strtol(charArr, NULL, 16);
     initTime_millis = millis();
-    Serial.print("Current time: ");
-    Serial.println(initTime, HEX);
-    Serial.println("BLE done.");
   }
 }
 
@@ -590,7 +591,6 @@ void manualControl() {
 void showMotorPosition() {
   clearDataArea();
   centerString("Motor ms: " + String(millis() - lastMotorStateChangeMillis), MID, MID);
-  Serial.print("motor ms:");
 }
 
 void debugMode() {
@@ -640,7 +640,7 @@ void debounceMenu() {
   clearScreen();
   carrier.leds.clear();
   carrier.leds.show();
-  delay(50);
+  delay(100);
   refreshTime = millis();
 }
 
@@ -710,14 +710,12 @@ void motorDown() {
   }
 }
 void motorOn() {
-  Serial.println("Motor on");
   motorActive = true;
   tic.setCurrentLimit(currentLimitWhileMoving);
   tic.energize();
   tic.exitSafeStart();
 }
 void motorOff() {
-  Serial.println("Motor off");
   tic.haltAndSetPosition(0);
   tic.deenergize();
   tic.setCurrentLimit(currentLimitWhileStopped);
@@ -732,13 +730,12 @@ void motorOff() {
 // dataType, time, data1, data2
 void logData(int dataType) {
   int lum, none;
+  long sdSaveDuration = millis();
   while (!carrier.Light.colorAvailable()) {
     delay(5);
   }
   carrier.Light.readColor(none, none, none, lum);
 
-  Serial.print("Log Count: ");
-  Serial.println(dataCount);
   dataCols[0][dataCount] = dataType;
   dataCols[1][dataCount] = millis() / 1000;
   dataCols[2][dataCount] = localTime;
@@ -756,7 +753,6 @@ void logData(int dataType) {
   }
   dataCount++;
   if (dataCount == SD_BUFFER_SIZE) {
-    Serial.println("Writing data to SD...");
     motorStop();  // pause the motor
     carrier.leds.clear();
     carrier.leds.show();
@@ -777,5 +773,5 @@ void logData(int dataType) {
     }
   }
   // in case motor was running
-  lastMotorStateChangeMillis = millis();
+  lastMotorStateChangeMillis = lastMotorStateChangeMillis + (millis() - sdSaveDuration);
 }
