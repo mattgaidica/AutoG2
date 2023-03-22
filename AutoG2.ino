@@ -34,11 +34,14 @@ File sdFile;
 bool touch[5] = { 0 };
 bool menuMask[5] = { 0 };
 long int touchTime[5] = { 0 };
-const int MENU_CAL = 0;
-const int MENU_SET = 1;
-const int MENU_MANUAL = 2;
-const int MENU_DEBUG = 3;
-const int MENU_HOME = 4;
+enum menuItems {
+  MENU_CAL,
+  MENU_SET,
+  MENU_MANUAL,
+  MENU_DEBUG,
+  MENU_HOME
+};
+const int MENUKEY[5] = {5, 1, 2, 3, 4};
 const String MENU_NONE = ".";
 const int LED_BRIGHTNESS = 50;
 const int SCREENSAVER_TIMEOUT = 1000 * 30;
@@ -47,7 +50,8 @@ const int TEXT_SIZE = 2;
 const int MID = 120;
 const int ROW = 20;
 // Touch settings
-const int TOUCH_THRESH = 1000;
+const int TOUCH_THRESH = 700;
+// int TOUCH_THRESH;  // calibrate during startup
 const int TOUCH_TIMEOUT_MS = 100;
 // Variables
 long int refreshTime = 0;
@@ -75,7 +79,6 @@ const uint32_t MOTOR_STATE_STOP = 0;
 long int lastMotorStateChangeMillis = 0;
 uint32_t lastMotorState = 0;
 const int FORCE_MOTOR_STOP_MS = 2000;
-
 
 // ADC + Closed-loop
 const int neg_pin = A5;
@@ -121,6 +124,16 @@ void setup() {
   carrier.display.setCursor(120, 120);
   carrier.display.print("+");               // mark center
   centerString("Init...", MID, MID - ROW);  // use +/-ROW
+
+  // for (int j = 0; j < 100; j++) {
+  //   for (int i = 0; i < 5; i++) {
+  //     int thisTouch = abs(analogRead(i + 1));
+  //     if (thisTouch > TOUCH_THRESH) {
+  //       TOUCH_THRESH = thisTouch;
+  //     }
+  //   }
+  // }
+  // TOUCH_THRESH = TOUCH_THRESH + 20; // touch ranges 0-1023
 
   // init code
   carrier.leds.setBrightness(LED_BRIGHTNESS);
@@ -213,7 +226,7 @@ void buttonsUpdate() {
   }
   for (int i = 0; i < 5; i++) {
     // rep with carrier.Buttons.getTouch(TOUCH0)?
-    if (analogRead(i) > TOUCH_THRESH) {
+    if (abs(analogRead(MENUKEY[i])) > TOUCH_THRESH) {
       touch[i] = true;
       touchTime[i] = millis();
     }
@@ -222,7 +235,7 @@ void buttonsUpdate() {
   carrier.leds.clear();
   if (lightOn) {
     for (int i = 0; i < 5; i++) {
-      carrier.leds.setPixelColor(i, 255, 255, 255);
+      carrier.leds.setPixelColor(MENUKEY[i], 255, 255, 255);
     }
   } else {
     for (int i = 0; i < 5; i++) {
