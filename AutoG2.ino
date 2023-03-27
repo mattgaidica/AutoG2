@@ -50,7 +50,7 @@ const int TEXT_SIZE = 2;
 const int MID = 120;
 const int ROW = 20;
 // Touch settings
-const int TOUCH_THRESH = 700;
+const int TOUCH_THRESH = 900;
 // int TOUCH_THRESH;  // calibrate during startup
 const int TOUCH_TIMEOUT_MS = 100;
 // Variables
@@ -117,6 +117,8 @@ void setup() {
   for (unsigned long const serialBeginTime = millis(); !Serial && (millis() - serialBeginTime > 5000);) {}
 
   carrier.begin();
+  carrier.Relay1.close();
+  carrier.Relay2.close();
   carrier.display.setRotation(0);
 
   clearScreen();  // default is white text
