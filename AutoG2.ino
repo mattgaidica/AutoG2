@@ -22,7 +22,7 @@ C |  x
 #include <TimeLib.h>
 #include <ArduinoBLE.h>
 
-float version = 1.8;
+float version = 2.0;
 
 MKRIoTCarrier carrier;
 ADS1115 ADS(0x48);
@@ -41,7 +41,7 @@ enum menuItems {
   MENU_DEBUG,
   MENU_HOME
 };
-const int MENUKEY[5] = {5, 1, 2, 3, 4};
+const int MENUKEY[5] = { 5, 1, 2, 3, 4 };
 const String MENU_NONE = ".";
 const int LED_BRIGHTNESS = 50;
 const int SCREENSAVER_TIMEOUT = 1000 * 30;
@@ -113,13 +113,11 @@ uint32_t initTime = 0;
 
 void setup() {
   /* Initialize serial and wait up to 5 seconds for port to open */
+  carrier.begin();
+  carrier.display.setRotation(0);
+
   Serial.begin(9600);
   for (unsigned long const serialBeginTime = millis(); !Serial && (millis() - serialBeginTime > 5000);) {}
-
-  carrier.begin();
-  carrier.Relay1.close();
-  carrier.Relay2.close();
-  carrier.display.setRotation(0);
 
   clearScreen();  // default is white text
   carrier.display.setTextSize(TEXT_SIZE);
@@ -621,6 +619,7 @@ void debugMode() {
       clearDataArea();
       char buffer[30];
       if (adcOnline) readADC();
+      centerString("v" + String(version), MID, MID - ROW);
       sprintf(buffer, "t: %i:%i:%i (%is)", hour(localTime), minute(localTime), second(localTime), millis() / 1000);
       centerString(buffer, MID, MID);
       centerString("ADC: " + String(adcVal) + " (" + String(adcGrams) + "g)", MID, MID + ROW);
